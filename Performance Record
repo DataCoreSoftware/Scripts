@@ -1,0 +1,109 @@
+Clear-Host
+Set-StrictMode -Version latest
+################ Variables #################
+
+$node1 = "lgsds1"
+$node2 = "lgsds2"
+$start = "Tuesday, July 30, 2013 1:56:00 PM"
+$Tspan = New-TimeSpan -Minutes 2
+$end = "Tuesday, July 30, 2013 2:47:00 PM"
+
+# Initializing PowerShell Environment 
+$bpKey = 'BaseProductKey'
+$regKey = get-Item "HKLM:\Software\DataCore\Executive"
+$strProductKey = $regKey.getValue($bpKey)
+$regKey = get-Item "HKLM:\$strProductKey"
+$installPath = $regKey.getValue('InstallPath')
+if (!(get-module -name DataCore.Executive.Cmdlets)) {
+	Import-Module "$installPath\DataCore.Executive.Cmdlets.dll"`
+	-ErrorAction:Stop -Warningaction:SilentlyContinue
+}
+
+function Import-credential($path) {
+    $cred = Import-Clixml $path
+    $cred.password = $cred.Password | ConvertTo-SecureString
+    New-Object system.Management.Automation.PSCredential(
+      $cred.username, $cred.password)
+}
+$creds = Import-credential "C:\Scripts\LGcred.xml"
+$conn = Connect-DcsServer -Connection LG -Server $node1 -Credential $creds
+$dcsrecsession = Get-DcsRecordingSession 
+$dcsrecinst = Get-DcsRecordingInstance
+$dcsrecperf = $dcsrecinst | Get-DcsRecordingPerformance
+$dcsrecinstmarv = Get-DcsRecordingInstance -Category PhysicalDisk | ? {$_.ExtendedCaption -eq "MARVELL Raid VD 0 on LGSDS1"}
+$dcsrecperfmarv = $dcsrecinstmarv | Get-DcsRecordingPerformance -StartTime $start -Resolution $Tspan -EndTime $end
+$dcsrecpoint = Get-DcsRecordingPoint
+Disconnect-DcsServer -Connection LG
+
+$Results = @()
+$changedmarv = $dcsrecperfmarv.performanceseries | Select -Property * |
+	%{$prop = $_
+		if ($prop.TotalReads -eq 0)	{$prop.TotalReadsTime = 0} 
+			else {$prop.TotalReadsTime = $prop.TotalReadsTime/$prop.TotalReads}
+		if ($prop.TotalWrites -eq 0)	{$prop.TotalWritesTime = 0} 
+			else {$prop.TotalWritesTime = $prop.TotalWritesTime/$prop.TotalWrites}
+		$prop.TotalReads = $prop.TotalReadsTime/$Tspan.TotalSeconds
+		$prop.TotalWrites = $prop.TotalWrites/$Tspan.TotalSeconds
+		$prop.TotalOperations = $prop.TotalOperations/$Tspan.TotalSeconds
+		$prop.TotalBytesRead = $prop.TotalBytesRead/$Tspan.TotalSeconds
+		$prop.TotalBytesWritten = $prop.TotalBytesWritten/$Tspan.TotalSeconds
+		$prop.TotalBytesTransferred = $prop.TotalBytesTransferred/$Tspan.TotalSeconds
+		$prop.TotalPendingCommands = $prop.TotalPendingCommands/$Tspan.TotalSeconds
+		$prop.CollectionTime = $prop.CollectionTime -replace("\d+/\d+/\d+ ","")
+		$Results += $prop
+	} 
+$items = @("CollectionTime", "TotalBytesTransferred", "TotalBytesRead", "TotalBytesWritten", "TotalOperations", "TotalReads", "TotalWrites", "TotalPendingCommands", "TotalReadsTime", "TotalWritesTime")
+
+$Results | Select  $items  |
+	Export-Csv c:\temp\Marvperf.csv -NoTypeInformation 
+
+$Excel = New-Object -Com Excel.Application
+$Excel.Visible = $false
+$WorkBook = $Excel.WorkBooks.Add()
+$WorkBook.WorkSheets.Item(1).Name = "RawData"
+$WorkBook.WorkSheets.Item(3).Delete()
+$WorkBook.WorkSheets.Item(2).Delete()
+$WorkSheet = $WorkBook.WorkSheets.Item("RawData")
+$x = 2
+$c = 1
+foreach ($i in $items)	{
+	$Worksheet.Cells.Item(1,$c) = $i
+	$c++
+}
+$c = 1
+$Results | % {
+	foreach ($i in $items)	{
+		$WorkSheet.Cells.Item($x,$c) = $_.($i)
+		$c++
+	}
+	$c = 1
+	$x++
+}
+
+$WorkBook.Charts.Add() | Out-Null
+$Chart = $WorkBook.ActiveChart
+$Chart.SetSourceData($WorkSheet.Range("B1:B$x,C1:C$x,D1:D$x"))
+$Chart.SeriesCollection(1).xValues = $WorkSheet.Range("A2:A$x")
+$Chart.ChartType = 65
+$Chart.Name = "Bytes per Second"
+
+$WorkBook.Charts.Add() | Out-Null
+$WorkBook.ActiveChart.SetSourceData($WorkSheet.Range("E1:E$x,F1:F$x,G1:G$x"))
+$Chart = $WorkBook.ActiveChart
+$Chart.SeriesCollection(1).xValues = $WorkSheet.Range("A2:A$x")
+$Chart.ChartType = 65
+$Chart.Name = "IOPS"
+$Excel.Visible = $true
+
+$WorkBook.Charts.Add() | Out-Null
+$WorkBook.ActiveChart.SetSourceData($WorkSheet.Range("H1:H$x,I1:I$x,J1:J$x"))
+$Chart = $WorkBook.ActiveChart
+$Chart.SeriesCollection(1).xValues = $WorkSheet.Range("A2:A$x")
+$Chart.ChartType = 65
+$Chart.Name = "Latency(ms) and Queue"
+$Excel.Visible = $true
+
+
+
+
+	
