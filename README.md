@@ -5,23 +5,24 @@
 # The example scripts listed are just examples that have been tested against a very specific configuration 
 # which does not guarantee they will perform in the same manner in all implementations.  
 # DataCore advises that you test these scripts in a test configuration before implementing them in production. 
+# 
+# The example scripts are provided and you accept them "as is" and "with all faults."  
+# DataCore expressly disclaims all warranties and conditions, whether express or implied, 
+# and datacore expressly disclaims all other warranties and conditions, including any 
+# implied warranties of merchantability, non-infringement, fitness for a particular purpose, 
+# and against hidden defects to the fullest extent permitted by law.  
 #
-# THE EXAMPLE SCRIPTS ARE PROVIDED AND YOU ACCEPT THEM "AS IS" AND "WITH ALL FAULTS."  
-# DATACORE EXPRESSLY DISCLAIMS ALL WARRANTIES AND CONDITIONS, WHETHER EXPRESS OR IMPLIED, 
-# AND DATACORE EXPRESSLY DISCLAIMS ALL OTHER WARRANTIES AND CONDITIONS, INCLUDING ANY 
-# IMPLIED WARRANTIES OF MERCHANTABILITY, NON-INFRINGEMENT, FITNESS FOR A PARTICULAR PURPOSE, 
-# AND AGAINST HIDDEN DEFECTS TO THE FULLEST EXTENT PERMITTED BY LAW.  
-#
-# NO ADVICE OR INFORMATION, WHETHER ORAL OR WRITTEN, OBTAINED FROM DATACORE OR ELSEWHERE 
-# WILL CREATE ANY WARRANTY OR CONDITION.  DATACORE DOES NOT WARRANT THAT THE EXAMPLE SCRIPTS 
-# WILL MEET YOUR REQUIREMENTS OR THAT THEIR USE WILL BE UNINTERRUPTED, ERROR FREE, OR FREE OF 
-# VARIATIONS FROM ANY DOCUMENTATION. UNDER NO CIRCUMSTANCES WILL DATACORE BE LIABLE FOR ANY INCIDENTAL, 
-# INDIRECT, SPECIAL, PUNITIVE OR CONSEQUENTIAL DAMAGES, INCLUDING WITHOUT LIMITATION LOSS OF PROFITS, 
-# SAVINGS, BUSINESS, GOODWILL OR DATA, COST OF COVER, RELIANCE DAMAGES OR ANY OTHER SIMILAR DAMAGES OR LOSS, 
-# EVEN IF DATACORE HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGES AND REGARDLESS OF WHETHER 
-# ARISING UNDER CONTRACT, WARRANTY, TORT (INCLUDING NEGLIGENCE), STRICT LIABILITY OR OTHERWISE. 
-# EXCEPT AS LIMITED BY APPLICABLE LAW, DATACORE’S TOTAL LIABILITY SHALL IN NO EVENT EXCEED US$100.  
-# THE LIABILITY LIMITATIONS SET FORTH HEREIN SHALL APPLY NOTWITHSTANDING ANY FAILURE OF ESSENTIAL PURPOSE 
-# OF ANY LIMITED REMEDY PROVIDED OR THE INVALIDITY OF ANY OTHER PROVISION. SOME JURISDICTIONS DO NOT ALLOW 
-# THE EXCLUSION OR LIMITATION OF INCIDENTAL OR CONSEQUENTIAL DAMAGES, SO THE ABOVE LIMITATION OR EXCLUSION MAY NOT APPLY TO YOU.​
+# no advice or information, whether oral or written, obtained from datacore or elsewhere 
+# will create any warranty or condition.  datacore does not warrant that the example scripts 
+# will meet your requirements or that their use will be uninterrupted, error free, or free of 
+# variations from any documentation. under no circumstances will datacore be liable for any incidental, 
+# indirect, special, punitive or consequential damages, including without limitation loss of profits, 
+# savings, business, goodwill or data, cost of cover, reliance damages or any other similar damages or loss, 
+# even if datacore has been advised of the possibility of such damages and regardless of whether 
+# arising under contract, warranty, tort (including negligence), strict liability or otherwise. 
+# except as limited by applicable law, datacore’s total liability shall in no event exceed us$100.  
+# the liability limitations set forth herein shall apply notwithstanding any failure of essential purpose 
+# of any limited remedy provided or the invalidity of any other provision. some jurisdictions do not allow 
+# the exclusion or limitation of incidental or consequential damages, so the above limitation or exclusion may not apply to you.​
+
 
