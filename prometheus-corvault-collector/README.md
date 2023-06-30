@@ -3,9 +3,13 @@
 This code will ssh to the Seagate Corvault management port and collect
 via the corvault-cli the controller and disk statistics.
 
+More information about their CLI can be found here https://www.seagate.com/content/dam/seagate/migrated-assets/www-content/support-content/raid-storage-systems/corvault/_shared/files/204813400-00-A-Exos_CORVAULT_CLI_Reference_Guide.pdf
+
 pre-requirements are python3, paramiko and prometheus_client packages.
 
+```
 pip install -r pip-requirements.txt
+```
 
 On the Seagate Corvault create a new account and grant it monitor-only priviledges for CLI only.
 Edit prometheus-corvault-collector.py and fill in the user credentials
