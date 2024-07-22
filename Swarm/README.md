@@ -1,9 +1,5 @@
 # Scripts
-Open source community repository for sample DataCore scripts
-
-### IMPORTANT:
-The example scripts listed are just examples that have been tested against a very specific configuration 
-which does not guarantee they will perform in the same manner in all implementations.  DataCore advises that you test these scripts in a test configuration before implementing them in production. 
+Open source community repository for sample Swarm scripts
 
 
 
