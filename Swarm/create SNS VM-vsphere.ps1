@@ -12,14 +12,14 @@ param(
 $vmname = "SNS-autoinstall"
 #Configurations: Typ, CPUs, RAM GB, Disk0 GB, Disk1 GB, DataDisk count, DataDisk Size GB
 $variante = (16,64,64,100,8,16)
-$vcenter = "vcenter.dcs-testcenter.local"
-$username = "administrator@sso.dcs-testcenter.local"
-$password = "Terra001!"
+$vcenter = "vcenter.vsphere.local"
+$username = "administrator@vsphere.local"
+$password = "datacore"
 $hostUsername = "root"
 $hostPassword = "datacore"
-$datacenter = "RZ-Gruen"
-$Datastore = "SM-Div"
-$vmhost = "esx-gruen-01.dcs-testcenter.local"
+$datacenter = "RZ"
+$Datastore = "DS"
+$vmhost = "esx.vsphere.local"
 $managementnet = "VM Network"
 $heartbeartnet = "isolated"
 $downloadiso = $true
