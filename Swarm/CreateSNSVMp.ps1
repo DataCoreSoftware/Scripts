@@ -35,8 +35,8 @@ $proxyauth = ""
 
 # Path to the Ubuntu ISO file, the name of Ubuntu ISO file and the Ubuntu Download URL (Ubuntu Server 22.04.4 LTS)
 $isopath = "C:\Downloads"
-$ubtiso = "ubuntu-22.04.4-live-server-amd64.iso"
-$ubturl = "https://ubuntu.hysing.is/ubuntu-releases/22.04.4/$ubtiso"
+$ubtiso = "ubuntu-22.04.5-live-server-amd64.iso"
+$ubturl = "https://releases.ubuntu.com/22.04.5/$ubtiso"
 
 
 # Variables for VM
