@@ -4,7 +4,7 @@
 # ---   Script provided as is, no support                                                                                       ---
 # ---   Tested on Windows 11 with Hyper-V enabled                                                                               ---
 # ---   Creator: Klaus Krebber, DataCore Software, CE Region                                                                    ---
-# ---   Version 1.1, 04.08.2024                                                                                                 ---
+# ---   Version 1.2, 17.02.2025                                                                                                 ---
 # ---                                                                                                                           ---
 # ---   Use the script carefully as it deletes an existing VM without asking!!!                                                 ---
 # ---	Checks if the SNS VM already exists and if yes the script deletes the VM and create it again                            ---
