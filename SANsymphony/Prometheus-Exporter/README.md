@@ -154,7 +154,7 @@ Log files are saved to:
 
 For complete setup instructions (DataCore Exporter + Windows Exporter + Prometheus + Grafana), refer to:
 
-➡️ [Prometheus Exporter for DataCore SANsymphony](https://docs.datacore.com/Prometheus-Exporter/prometheus-exporter/overview.htm)
+➡️ [Prometheus Exporter for DataCore SANsymphony](https://docs.datacore.com/Prometheus-Exporter-for-SANsymphony/prometheus-exporter-for-sansymphony/overview.htm)
 
 ---
 
