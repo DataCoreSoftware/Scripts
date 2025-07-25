@@ -126,4 +126,4 @@ DcsEstimateDedupRatio.exe C:\Data D:\Backups
 ## 📚 Documentation
 
 For more details, refer to:
-➡️ [Deduplication Estimation Tool for DataCore SANsymphony](https://docs.datacore.com/#)
+➡️ [Deduplication Estimation Tool for DataCore SANsymphony](https://docs.datacore.com/Deduplication-Estimation-Tool/deduplication-estimation-tool/overview.htm)
