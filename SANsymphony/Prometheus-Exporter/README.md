@@ -43,10 +43,10 @@ New-StoredCredential -Target 'datacore-api' -UserName 'restserver-username' -Pas
 
 ### 3. Windows Exporter
 
-Install [windows\_exporter](https://github.com/prometheus-community/windows_exporter) with the `--collector.textfile.directory` flag:
+Install [windows\_exporter](https://github.com/prometheus-community/windows_exporter) with the `--collector.textfile.directories` flag:
 
 ```
---collector.textfile.directory="C:\Program Files\windows_exporter\textfile_inputs"
+--collector.textfile.directories="C:\Program Files\windows_exporter\textfile_inputs"
 ```
 
 ### 4. Prometheus Configuration
