@@ -5,10 +5,10 @@ Architecture: amd64
 Maintainer: Chiranth J S <chiranth.js@datacore.com>
 Depends: python3 (>= 3.6), jq, open-iscsi, multipath-tools
 Filename: pool/main/SANsymphony-plugin_1.0.0_amd64.deb
-Size: 18880
-MD5sum: b53fac202f4c6ec93b59ca6804399cef
-SHA1: 1fc1e5987e03b29ad0d7c56a00b488b2d11c8b1b
-SHA256: ddc983719c22a66a4cfe98c53b149e9f12d8522deca6bccbe44960da87d7ebb8
+Size: 18900
+MD5sum: c6d30cb03feb9891bc4806817f059b20
+SHA1: 9f564143437f2e193a1ca8dd11f99bcb4442b38e
+SHA256: e00ca63beb589c7c1e88f58a435ae7567acd2f1c4e3bef9e49dee9bfabe7ea59
 Section: utils
 Priority: optional
 Description: A proxmox storage plugin for DataCore SANsymphony.

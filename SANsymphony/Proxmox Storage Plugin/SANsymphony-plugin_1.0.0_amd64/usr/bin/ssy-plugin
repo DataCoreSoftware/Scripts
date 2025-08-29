@@ -544,7 +544,7 @@ def create_vd(params):
         #     ["pvesh", "get", "/cluster/nextid"], text=True
         # ).strip()
         # if debug: print(GREEN + f"\tNext VM ID: {vm_id}" + NC)
-        vm_id = "99999"  # Use a fixed VM ID for the virtual disk
+        vm_id = "9000"  # Use a fixed VM ID for the virtual disk
 
         # creating SANsymphony VD through pvesm alloc command
         pvesm_alloc_command = ["pvesm", "alloc", params['SSYname'], vm_id, params['LVMname'], params['LVMsize'] + "G"]
@@ -556,7 +556,7 @@ def create_vd(params):
 
         
     # Extract the VD ID using regex
-    match = re.search(r'Datacore VD \{([a-fA-F0-9]{32})\}', result.stdout)
+    match = re.search(r'SANsymphony VD \{([a-fA-F0-9]{32})\}', result.stdout)
     vd_id = match.group(1)
     if debug: print(GREEN + f"\tExtracted VD ID: {vd_id}" + NC)
 
@@ -565,9 +565,9 @@ def create_vd(params):
 
     # Extract the device name (e.g., sdf) from the symlink target
     try:
-        cmd = f"ls -l /dev/disk/by-id/ | grep {vd_id}"
-
         for _ in range(10):  # Retry for 10 seconds
+            cmd = f"ls -l /dev/disk/by-id/ | grep {vd_id}"
+
             try:
                 output = subprocess.check_output(cmd, shell=True, text=True)
                 matches = re.findall(r'-> \.\./\.\./(\w+)', output)

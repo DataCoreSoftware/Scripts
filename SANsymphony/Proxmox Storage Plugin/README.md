@@ -4,6 +4,11 @@ A Proxmox VE storage plugin to integrate [DataCore SANsymphony™](https://www.d
 
 ---
 
+Note: All the mentioned installation destination will be changed to the same github repo once we publish the plugin and we will also attach the Web help link once its live
+-
+
+---
+
 ## 📚 Table of Contents
 
 1. [Overview](#-overview)

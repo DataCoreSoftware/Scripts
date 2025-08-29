@@ -48,11 +48,13 @@ fi
 
 multipath -r
 sleep 2
-multipath -ll 1>/tmp/multipath.ll.$$
-multipath -v3 &>/tmp/multipath.v3.$$
+TMP_LL=$(mktemp /tmp/multipath.ll.XXXXXX)
+TMP_V3=$(mktemp /tmp/multipath.v3.XXXXXX)
 
+multipath -ll > "$TMP_LL"
+multipath -v3 &> "$TMP_V3"
 
-DEVICES=$(cat /tmp/multipath.v3.$$ | awk -F"\||:"  '/\| sd/ {print $2}' |sort -u)
+DEVICES=$(cat $TMP_V3 | awk -F"\||:"  '/\| sd/ {print $2}' |sort -u)
 
 
 while IFS= read -r LINE; do
@@ -70,14 +72,13 @@ while IFS= read -r LINE; do
     fi
   else
     DEVICE=$(echo "$LINE" | awk -F"[0-9]+\:[0-9]+\:[0-9]+\:[0-9]" '{print $2}'|awk '{print $1}')
-    PORTAL=$(cat /tmp/multipath.v3.$$ |awk -F"\| " '{print $2}'| awk '/'$DEVICE': tgt_node_name/ {print $0}'|awk -F":" '{print $3}'|sort -u)
+    PORTAL=$(cat $TMP_V3 |awk -F"\| " '{print $2}'| awk '/'$DEVICE': tgt_node_name/ {print $0}'|awk -F":" '{print $3}'|sort -u)
     if [ $(echo "${LINE}" | grep -c "faulty") -eq 0 ]; then
       printf "${GREEN}${LINE} ${YELLOW}($PORTAL)${NC}\n"
     else
       printf "${RED}${LINE} ${YELLOW}($PORTAL)${NC}\n"
     fi
   fi
-done < /tmp/multipath.ll.$$
+done < $TMP_LL
 
-
-rm /tmp/multipath.*.$$
+rm -f "$TMP_LL" "$TMP_V3"
