@@ -1,0 +1,44 @@
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA512
+
+Origin: DataCore SANsymphony Repository
+Label: ssy-plugin
+Suite: stable
+Codename: stable
+Version: 1.0.0
+Architectures: amd64
+Components: main
+Description: A proxmox storage plugin for DataCore SANsymphony software repository
+Date: Fri, 29 Aug 2025 08:39:52 +0000
+MD5Sum:
+ a4a31e8e81d207dfe1c1f011395b8b10 870 Release.gpg
+ 5ba61cb11227770eda762e32baee4f25 2060 InRelease
+ 96d8ddf4f5342aef4b0a6117e08314e9 389 main/binary-amd64/Packages.gz
+ edaf5d73f272fe8431db2b70c75c2142 512 main/binary-amd64/Packages
+SHA1:
+ 0b303835165ceabfdfa3d4ca3421272f7488c7d8 870 Release.gpg
+ f186a59490427365afc25caef371a0fa004b0336 2060 InRelease
+ 408f611b79ad538cbed9c416cb45383da63738cd 389 main/binary-amd64/Packages.gz
+ 736825d7984d2d070e4637ca94c429a453c1bcea 512 main/binary-amd64/Packages
+SHA256:
+ 46b05fb17efce3877d8193073e3dfd6842572e6c1523c8c3e15a6cc98a786e7c 870 Release.gpg
+ 731309097a25df1fc1f1c922f8173d90472a29a85b79438bd6b9d52de76a71f6 2060 InRelease
+ 3ed30036257d65f877e180ca66667bb4dab7be7cc827c066db2d09dbfd3f16b6 389 main/binary-amd64/Packages.gz
+ ee9ce86d9216fcd7155cb44a34539d0d1ab72073d99c12e0af69013122243353 512 main/binary-amd64/Packages
+-----BEGIN PGP SIGNATURE-----
+
+iQJNBAEBCgA3FiEE58i+uMXlyKG0maMH9Y4XjmYSLZ0FAmixar8ZHGNoaXJhbnRo
+LmpzQGRhdGFjb3JlLmNvbQAKCRD1jheOZhItnXtUD/9wlJp7yXnZuBkocOjHmate
+gDoe+HDeMhIpZP3RYHMn6mnNeurvb5X1rvIQiAQbI3EV0ysPgYMSWpBPUPZnW2nF
+oeiAvMuT+srtsnYuYFxXd0l5P1SiMI+JceHgy2JqpV95lHF2pAhbEERWtp9RU/nV
+ptDLYBL5d1a128BBMQQ+vnfkuq2E7FxB3xoRDtaJO5IRrcj4xiQATVuNedK/iQaL
+Ey1rR54xiAykog75bZU+g0Z3rLEMFCn/cBBEbSxlijqYmZUcCA2qNFDNolh52jaE
+6bejmRlXiLi7nvuzuEa3cCZeSCCoDcBstmbEJoWnPedwdOpCnCELCUv8+qSkn3vD
+mI/ENLVLUikYjiB0fhzyeX6jfDjKocuNx4yXM3AfR9sXA6EUf7FtJb8xNN66iUuQ
+R4+hF+bt+j92jKmF9sOgGpc7C7aK+XLutkOTVw1dpYzR6zzpfxiK7ogy5VTSSIrO
+JMub60rJFx0qxG2pNRCpq8fQVys8F5SZ4s/Xk5nanhLIcL0NTW+Wg8I7sX9C8T4o
+NZF1uxl4RWttVXlaWGD05brZmT5UgEQ8G2lopvDKEodEwj5064ADblLguOAoAMIJ
+BPUK9aCD6dHXJDHWhMOvuRTkF77GOjQIjOElzKymx/SOALYisog7+9uS4FBfUx79
+d+jI8SXbQtleFWkCZWU4rQ==
+=dirc
+-----END PGP SIGNATURE-----
