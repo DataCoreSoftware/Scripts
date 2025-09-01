@@ -1,0 +1,1113 @@
+#!/usr/bin/python3
+import argparse
+import subprocess
+import json
+import re
+import socket
+import time
+import os
+import getpass
+
+RED = '\033[1;31m'
+GREEN = '\033[1;32m'
+YELLOW = '\033[1;33m'
+NC = '\033[0m'
+
+def select_action():
+    print("Please select the Operation type:")
+    print("1. Add SANsymphony Storage class (SSY)")
+    print("2. Add LVM Storage class (LVM)")
+    print("3. Remove existing Storage class")
+    print("4. Display SSY multipath status")
+    while True:
+        choice = input(YELLOW + "Enter your choice [1-4]: " + NC).strip()
+        if choice == "1":
+            print("Please provide the following parameters to create SANsymphony Storage class.")
+            return "ssy"
+        elif choice == "2":
+            print("Please provide the following parameters to create LVM Storage class.")
+            return "lvm"
+        elif choice == "3":
+            return "remove"
+        elif choice == "4":
+            return "multipath"
+        else:
+            print(RED + "Invalid choice. Please select from 1 to 4." + NC)
+
+def get_ssy_parameters(provided_params):
+    input_params = {}
+    value = None
+    _params = ['SSYipAddress', 'SSYcredentials', 'portals', 'vdTemplateName', 'SSYname', 'nodes', 'shared', 'disable']
+
+    if provided_params.get('default') == '1' and not provided_params.get('portals'):
+        provided_params['portals'] = "all"
+
+    for param in _params:
+        if provided_params.get(param) is None:
+            match param:
+                case 'SSYname':
+                    value = input(f"\tEnter Storage name (default: {input_params['vdTemplateName']}): ") or input_params['vdTemplateName']
+                case 'SSYipAddress':
+                    value = get_IPs()
+                case 'SSYcredentials':
+                    if provided_params.get('SSYusername') and provided_params.get('SSYpassword'):
+                        SSYuser = provided_params['SSYusername']
+                        SSYpass = provided_params['SSYpassword']
+                    else:
+                        SSYuser, SSYpass = check_credentials(input_params['SSYipAddress'])
+                case 'vdTemplateName':
+                    value = select_vd_template(input_params['SSYipAddress'], SSYuser, SSYpass)
+                case 'portals':
+                    portals, targets = discover_portals(input_params['SSYipAddress'], SSYuser, SSYpass)
+                case 'nodes':
+                    if provided_params.get('default') == '1':
+                        value = "all"
+                    else:
+                        value = input("\tEnter PVE node names (default: all nodes in the cluster): ") or "all"
+                case 'shared':
+                    if provided_params.get('default') == '1':
+                        value = "1"
+                    else:
+                        while True:
+                            value = input("\tShared storage? [1/0] (default: 1): ").strip() or "1"
+                            if value in ["1", "0", None]:
+                                break
+                            print(RED + "\tInvalid input. Please enter '1' or '0'." + NC)
+                case 'disable':
+                    if provided_params.get('default') == '1':
+                        value = "0"
+                    else:
+                        while True:
+                            value = input("\tDisable storage? [1/0] (default: 0): ").strip() or "0"
+                            if value in ["1", "0", None]:
+                                break
+                            print(RED + "\tInvalid input. Please enter '1' or '0'." + NC)
+                case _:
+                    value = input(f"\tEnter {param}: ")
+            input_params[param] = value or None
+        else:
+            input_params[param] = provided_params[param]
+
+    if provided_params.get('portals'):
+        portals, targets = discover_portals(provided_params['SSYipAddress'], provided_params['SSYusername'], provided_params['SSYpassword'], provided_params.get('portals'))
+
+    params = {
+        'SSYname': input_params['SSYname'],
+        'SSYipAddress': input_params['SSYipAddress'],
+        'SSYusername': SSYuser,
+        'SSYpassword': SSYpass,
+        'vdTemplateName': input_params['vdTemplateName'],
+        'portals': portals,
+        'targets': targets,
+        'nodes': input_params['nodes'],
+        'shared': input_params['shared'],
+        'disable': input_params['disable'],
+        'default': provided_params.get('default')
+    }
+
+    if debug: print(YELLOW + f"\nInput Parameters for SSY storage: \n{provided_params}" + NC)
+    if debug: print(YELLOW + f"\nOutput Parameters for SSY storage: \n{params}" + NC)
+
+    return params
+
+def get_IPs():
+    while True:
+        value = input("\tEnter comma-separated SANsymphony management IP address: ").strip()
+        if not value:
+            print(RED + "\t\tError: IP address cannot be empty. Please enter a valid management IP address." + NC)
+            continue
+
+        unreachable_flag = 0
+        for ip in [ip.strip() for ip in value.split(",") if ip.strip()]:
+            if debug: print(YELLOW + f"\t\tPinging {ip}..." + NC)
+            ping_result = subprocess.run(
+                ["ping", "-c", "1", "-W", "2", ip],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+            if ping_result.returncode != 0:
+                print(RED + f"\t\tError: {ip} is not reachable." + NC)
+                unreachable_flag = 1
+
+        if unreachable_flag == 0:
+            break
+        else:
+            print(RED + "\t\tPlease enter valid reachable IP addresses." + NC)
+
+    return value
+
+def check_credentials(SSYips):
+    while True:
+        SSYip = SSYips.split(",")[0].strip()
+
+        SSYuser = input("\tEnter SANsymphony username (default: administrator): ").strip() or "administrator"
+        if not SSYuser:
+            print(RED + "\t\tError: Username cannot be empty. Please enter a valid username." + NC)
+            continue
+
+        SSYpass = getpass.getpass("\tEnter SANsymphony password: ")
+        if not SSYpass:
+            print(RED + "\t\tError: Password cannot be empty. Please enter a valid password." + NC)
+            continue
+
+        if debug: print(YELLOW + f"\t\tChecking SANsymphony credentials..." + NC)
+        try:
+            response = subprocess.run(
+                ["curl", "-s", "-m", "3", "-k", "-L", "-H", f"ServerHost: {SSYip}",
+                 "-u", f"{SSYuser}:{SSYpass}", f"https://{SSYip}/RestService/rest.svc/1.0/servers"],
+                stdout=subprocess.PIPE
+            )
+
+            output = response.stdout.decode()
+            if "Invalid credentials" in output or "Unauthorized" in output or "not authenticated" in output or "ErrorCode" in output:
+                print(RED + "\t\tError: Invalid credentials. Please try again." + NC)
+                if debug: print(YELLOW + f"\t\tResponse from SANsymphony: {response.stdout.decode()}" + NC)
+                continue
+            else:
+                return SSYuser, SSYpass
+        except Exception as e:
+            print(RED + f"\t\tError checking credentials: {e}" + NC)
+            continue
+
+def discover_portals(SSYips, SSYuser, SSYpass, portals=None):
+    SSYip = SSYips.split(",")[0].strip()  # Use the first IP address from the list
+
+    if portals is not None:
+        input_portal = portals
+    else:
+        input_portal = input("\tEnter the Front End portals (default: auto discover all FE portals in the SANsymphony Server Group): ") or "all"
+
+    try:
+        # Fetching the iSCSI Portals and Targets from the SANsymphony REST API
+        response = subprocess.run(
+            ["curl", "-s", "-m", "3", "-k", "-L", "-H", f"ServerHost: {SSYip}",
+             "-u", f"{SSYuser}:{SSYpass}", f"https://{SSYip}/RestService/rest.svc/1.0/ports/iscsi"],
+            stdout=subprocess.PIPE
+        )
+
+        result = json.loads(response.stdout.decode())
+        
+        # getting the iSCSI Portals and Targets from the result
+        iscsi_data = [
+            {"portal": p["Address"]["Address"], "target": i["PortName"]}
+            for i in result if i.get("ServerPortProperties", {}).get("Role") == 1
+            for p in i.get("PortConfigInfo", {}).get("PortalsConfig", [])
+        ]
+
+        # Filter portals if user specified, otherwise use all
+        if input_portal and input_portal != "all":
+            selected_portals = {p.strip() for p in input_portal.split(",")}
+            filtered = [entry for entry in iscsi_data if entry['portal'] in selected_portals]
+            not_found = selected_portals - {entry['portal'] for entry in filtered}
+            for entry in filtered:
+                print(GREEN + f"\t\tDiscovered FE Portal: {entry['portal']} -> Target: {entry['target']}" + NC)
+            for portal in not_found:
+                print(RED + f"\t\tWarning: Not able to discover the FE Portal '{portal}'" + NC)
+        else:
+            filtered = iscsi_data
+            for entry in filtered:
+                print(GREEN + f"\t\tDiscovered FE Portal: {entry['portal']} -> Target: {entry['target']}" + NC)
+        
+        portals = targets = ""
+        for entry in filtered:
+            portals += entry['portal'] + ","
+            targets += entry['target'] + ","
+
+        # Remove trailing commas from portals and targets
+        portals = portals.rstrip(",")
+        targets = targets.rstrip(",")
+
+        return portals, targets
+    except Exception as e:
+        print(RED + f"Error fetching SANsymphony FE portals from {SSYip}: {e}" + NC)
+        exit(1)
+
+def select_vd_template(SSYips, SSYuser, SSYpass):
+    for SSYip in [ip.strip() for ip in SSYips.split(",") if ip.strip()]:
+        vd_templates = get_vdt(SSYip, SSYuser, SSYpass)
+        if vd_templates is None:
+            print(RED + f"\t\tError: Not able to get the Virtual Disk Template from {SSYip}." + NC)
+            continue
+        else:
+            break
+
+    if vd_templates is None:
+        print(RED + "\t\tError: Not able to get the Virtual Disk Template." + NC)
+        exit(1)
+
+    if len(vd_templates) == 1:
+        vdt = vd_templates[0]['Caption']
+        while True:
+            value = input("\tEnter the Virtual Disk Template name (default: " + vdt + "): ").strip() or vdt
+            if value:
+                if any(vdt.get('Caption') == value for vdt in vd_templates):
+                    return value
+                print(RED + f"\t\tTemplate '{value}' not found. Please enter a valid template name." + NC)
+
+    print("\tAvailable Virtual Disk Templates:")
+    for idx, vdt in enumerate(vd_templates, 1):
+        name = vdt.get('Caption')
+        print(f"\t\t{idx}. {name}")
+
+    while True:
+        choice = input(f"\t\tSelect a template [1-{len(vd_templates)}] or Enter Template Name (default: 1): ").strip()
+        if choice.isdigit() and 1 <= int(choice) <= len(vd_templates):
+            return vd_templates[int(choice) - 1]['Caption']
+        elif choice:
+            if any(vdt.get('Caption') == choice for vdt in vd_templates):
+                return choice
+            print(RED + f"\t\tTemplate '{choice}' not found. Please enter a valid template name or select from the list." + NC)
+        else:
+            return vd_templates[0]['Caption']
+
+def get_vdt(SSYip, SSYuser, SSYpass):
+    if debug: print(YELLOW + f"\t\tFetching Virtual Disk Templates from {SSYip}..." + NC)
+
+    try:
+        # Fetching the Virtual Disk Templates from the SANsymphony REST API
+        response = subprocess.run(
+            [
+                "curl", "-s", "-m", "3", "-k", "-L", "-H", f"ServerHost: {SSYip}",
+                "-u", f"{SSYuser}:{SSYpass}", f"https://{SSYip}/RestService/rest.svc/1.0/virtualdisktemplates"
+            ],
+            stdout=subprocess.PIPE,
+            check=True
+        )
+        vd_templates = json.loads(response.stdout.decode())
+    except Exception as e:
+        print(YELLOW + f"\tFailed to fetch Virtual Disk Templates data: {e}" + NC)
+        return None
+
+    if not vd_templates:
+        print(RED + "\tNo Virtual Disk Templates found on the SANsymphony server." + NC)
+        print(YELLOW + "\tYou need to create a Virtual Disk Template before proceeding." + NC)
+        exit(1)
+
+    return vd_templates
+     
+def output_status(storage_name):
+    print(GREEN + f"Fetching plugin status..." + NC)
+    pvesm_status_command = ["pvesm", "status"]
+    result = subprocess.run(pvesm_status_command, check=True, text=True, capture_output=True)
+
+    status = f"\n{YELLOW}pvesm status:{NC}\n"
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if len(parts) > 0 and parts[0] == storage_name:
+            status += GREEN + line + NC + "\n"
+        else:
+            status += line + "\n"
+    print(status)
+
+def add_ssy_storage(params):
+    add_pvesm_command = [
+        "pvesm", "add", "ssy", params['SSYname'],
+        "--SSYipAddress", params['SSYipAddress'],
+        "--SSYusername", params['SSYusername'],
+        "--SSYpassword", params['SSYpassword'],
+        "--portals", params['portals'],
+        "--targets", params['targets'],
+        "--vdTemplateName", params['vdTemplateName'],
+        "--shared", params['shared'],
+        "--disable", params['disable']
+    ]
+
+    if params['nodes'] != "all":
+        add_pvesm_command.extend(["--nodes", params['nodes']])
+
+    # Mask the password in the command for display
+    masked_command = []
+    for idx, item in enumerate(add_pvesm_command):
+        if item == params['SSYpassword']:
+            masked_command.append("*" * len(item))
+        else:
+            masked_command.append(item)
+
+    if params.get('default') != '1':
+        print("\nThe following command will be executed:\n" + YELLOW + " ".join(masked_command) + NC)
+        confirmation = input("\nDo you want to proceed? [y/n] (default: y): ").strip().lower() or "y"
+
+        if confirmation not in ["yes", "y"]:
+            print(RED + "Operation cancelled by the user." + NC)
+            exit(0)
+    try:
+        # Using pvesm add command to add the SSY storage class
+        print(GREEN + "Adding SSY storage class to Proxmox..." + NC)
+        result = subprocess.run(add_pvesm_command, check=True, text=True, capture_output=True)
+        print(result.stdout)
+    except subprocess.CalledProcessError as e:
+        print(RED + "\nError occurred while adding SSY storage class to Proxmox:\n" + NC + e.stderr)
+        exit(1)
+
+def get_lvm_parameters(provided_params):
+    params = {}
+    _params = ['LVMname', 'LVMsize', 'nodes', 'shared', 'disable', 'SSYname']
+
+    for param in _params:
+        if provided_params.get(param) is None:
+            match param:
+                case 'LVMsize':
+                    while True:
+                        value = input("\tEnter the Size of the storage in GiB: ")
+                        if value and value.isdigit() and int(value) > 0:
+                            break
+                        print(RED + "\tPlease enter a valid integer size." + NC)
+                case 'LVMname':
+                    while True:
+                        value = input("\tEnter the LVM storage name: ").strip()
+                        if value and " " not in value and "_" not in value:
+                            break
+                        print(RED + "\tLVM storage name cannot be empty or contain spaces or underscores. Please enter a valid name." + NC)
+                case 'SSYname':
+                    value = select_ssy_storage(provided_params)
+                case 'nodes':
+                    if provided_params.get('default') == '1':
+                        value = "all"
+                    else:
+                        value = input("\tEnter the nodes (default: all nodes in the cluster): ") or "all"
+                case 'shared':
+                    if provided_params.get('default') == '1':
+                        value = "1"
+                    else:
+                        while True:
+                            value = input("\tShared storage? (default: 1): ").strip() or "1"
+                            if value in ["1", "0", None]:
+                                break
+                            print(RED + "\tInvalid input. Please enter '1' or '0'." + NC)
+                case 'disable':
+                    if provided_params.get('default') == '1':
+                        value = "0"
+                    else:
+                        while True:
+                            value = input("\tDisable storage? (default: 0): ").strip() or "0"
+                            if value in ["1", "0", None]:
+                                break
+                            print(RED + "\tInvalid input. Please enter '1' or '0'." + NC)
+                case _:
+                    value = input(f"\tEnter {param} (optional): ")
+            params[param] = value or None
+        else:
+            params[param] = provided_params[param]
+
+    return params
+
+def select_ssy_storage(provided_params):
+    ssy_storage = get_ssy_storage()
+
+    if len(ssy_storage) == 0:
+        print(RED + "\tNo existing SSY storage found in your Proxmox configuration." + NC)
+        print(YELLOW + "\tYou need to create a new SSY storage before proceeding with LVM setup." + NC)
+        proceed = input("\tWould you like to create a new SSY storage now? [y/n] (default: y): ").strip().lower() or "y"
+        if proceed not in ["y", "yes"]:
+            print(RED + "Operation cancelled by the user." + NC)
+            exit(0)
+        else:
+            ssy_name = ssy_actions(provided_params)
+
+    ssy_storage.append("Create New SSY Storage")
+
+    print("\tAvailable SSY storage:")
+    for i in range(1, len(ssy_storage) + 1):
+        print(f"\t\t{i}. {ssy_storage[i - 1]}")
+
+    while True:
+        choice = input(f"\t\tSelect a storage [1-{len(ssy_storage)}] or Enter SSY storage Name (default: 1): ").strip() or "1"
+        if choice.isdigit() and 1 <= int(choice) <= len(ssy_storage) + 1:
+            if debug: print(f"\t\tYou selected: {ssy_storage[int(choice) - 1]}")
+            if int(choice) == len(ssy_storage):
+                ssy_name = ssy_actions(provided_params)
+            ssy_name = ssy_storage[int(choice) - 1]
+        elif choice:
+            if any(ssy == choice for ssy in ssy_storage):
+                ssy_name = choice
+            print(RED + f"\t\SSY storage '{choice}' not found. Please enter a valid storage name or select from the list." + NC)
+        else:
+            ssy_name = ssy_storage[0]
+        
+        try:
+            with open("/etc/pve/storage.cfg", "r") as f:
+                lines = f.readlines()
+
+            in_lvm_section = False
+            for line in lines:
+                line = line.strip()
+                if line == f"ssy: {ssy_name}":
+                    in_lvm_section = True
+                elif in_lvm_section and line.startswith("SSYipAddress"):
+                    SSYips = "".join(line.split()[1:])
+                    if debug: print(YELLOW + f"\tFound IP address of storage '{ssy_name}': {SSYips}" + NC)
+                elif in_lvm_section and line.startswith("SSYusername"):
+                    SSYuser = line.split()[1]
+                    if debug: print(YELLOW + f"\tFound user name of storage '{ssy_name}': {SSYuser}" + NC)
+                elif in_lvm_section and line.startswith("SSYpassword"):
+                    SSYpass = line.split()[1]
+                    if debug: print(YELLOW + f"\tFound password of storage '{ssy_name}': {SSYpass}" + NC)
+                elif in_lvm_section and line.startswith("vdTemplateName"):
+                    vdt = line.split()[1]
+                    if debug: print(YELLOW + f"\tFound VD Template Name of storage '{ssy_name}': {vdt}" + NC)
+                elif line == "":
+                    in_lvm_section = False
+        except Exception as e:
+            print(RED + f"Error reading storage.cfg: {e}" + NC)
+
+        isValid = validate_template_prefix(SSYips, SSYuser, SSYpass, vdt, ssy_name)
+
+        if isValid:
+            return ssy_name
+
+def validate_template_prefix(SSYips, SSYuser, SSYpass, vdt, ssy_name):
+    for ip in [ip.strip() for ip in SSYips.split(",") if ip.strip()]:
+        vd_templates = get_vdt(ip, SSYuser, SSYpass)
+        if vd_templates is None:
+            print(RED + f"\t\tError: Not able to get the Virtual Disk Template from {ip}." + NC)
+            continue
+
+        for template in vd_templates:
+            if debug: print(YELLOW + f"\t\tVirtual Disk Template '{template.get('Caption')}' has prefix: {template.get('VirtualDiskAlias')}" + NC)
+            if template.get('Caption') == vdt:
+                prefix = template.get('VirtualDiskAlias')
+                if prefix and " " not in prefix and "_" not in prefix:
+                    if debug: print(YELLOW + f"\t\tVirtual Disk Template '{vdt}' has a valid prefix: {prefix}" + NC)
+                    return True
+                else:
+                    print(RED + f"\t\tError: Virtual Disk Template {YELLOW}'{vdt}'{RED} of Storage class {YELLOW}'{ssy_name}'{RED} has an invalid prefix {YELLOW}'{prefix}'{RED}. It should not contain spaces or underscores." + NC)
+                    print(YELLOW + "\t\tPlease create/select/edit Virtual Disk Template with a valid prefix for LVM storage class creation." + NC)
+                    return False
+    
+    print(RED + f"\t\tError: Not able to get the Virtual Disk Template." + NC)
+    exit(1)
+    
+def get_ssy_storage():
+    storage_names = []
+    try:
+        with open("/etc/pve/storage.cfg", "r") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("ssy:"):
+                    # Format: ssy: NAME
+                    parts = line.split(":", 1)
+                    if len(parts) == 2:
+                        name = parts[1].strip()
+                        if name:
+                            storage_names.append(name)
+    except Exception as e:
+        print(RED + f"Error reading storage.cfg: {e}" + NC)
+    return storage_names
+
+def add_lvm_storage(params, vd_name=None):
+    print(GREEN + "\nAdding LVM storage class to Proxmox...\n" + NC)
+    if vd_name is None:
+        vd_name = params['SSYname']
+    add_pvesm_command = [
+        "pvesm", "add", "lvm", params['LVMname'],
+        "--vgname", vd_name,
+        "--shared", params['shared'],
+        "--disable", params['disable']
+    ]
+
+    if params['nodes'] != "all":
+        add_pvesm_command.extend(["--nodes", params['nodes']])
+
+    if debug: print(YELLOW + f"\tThe following command will be executed:\n{add_pvesm_command}" + NC)
+    
+    try:
+        # Using pvesm add command to add the LVM storage class
+        result = subprocess.run(add_pvesm_command, check=True, text=True, capture_output=True)
+    except subprocess.CalledProcessError as e:
+        print(RED + "\tError occurred while adding LVM storage class to Proxmox:" + NC)
+        print(f"\t{e.stderr}")
+
+        print(YELLOW + f"Terminating the script by deleting the created '{vd_name}' Virtual Disk..." + NC)
+        remove_lvm_attached_vd(params['LVMname'], vd_name)
+        exit(1)
+
+def create_vg(lvm_name, vd_name, mpath_device):
+    print(GREEN + "\nCreating Volume Group...\n" + NC)
+    try:
+        # Create the physical volume
+        subprocess.run(["pvcreate", mpath_device], check=True)
+        time.sleep(1)  # Wait for pvcreate to complete
+        # Create the volume group
+        subprocess.run(["vgcreate", vd_name, mpath_device], check=True)
+    except subprocess.CalledProcessError as e:
+        print(RED + f"\nError occurred while creating Volume Group '{vd_name}' on {mpath_device}:" + NC)
+        print(f"\t{e.stderr}")
+
+        print(YELLOW + f"Terminating the script by deleting the created '{vd_name}' Virtual Disk..." + NC)
+        remove_lvm_attached_vd(lvm_name, vd_name)
+        exit(1)
+
+def create_vd(params):
+    print(GREEN + "\nCreating Virtual Disk..." + NC)   
+    try:
+        # vm_id = subprocess.check_output(
+        #     ["pvesh", "get", "/cluster/nextid"], text=True
+        # ).strip()
+        # if debug: print(GREEN + f"\tNext VM ID: {vm_id}" + NC)
+        vm_id = "9000"  # Use a fixed VM ID for the virtual disk
+
+        # creating SANsymphony VD through pvesm alloc command
+        pvesm_alloc_command = ["pvesm", "alloc", params['SSYname'], vm_id, params['LVMname'], params['LVMsize'] + "G"]
+        result = subprocess.run(pvesm_alloc_command, check=True, text=True, capture_output=True)
+    except subprocess.CalledProcessError as e:
+        print(RED + f"\tError occurred while creating the SANsymphony VD from {params['SSYname']}:" + NC)
+        print(f"\t{e.stderr}")
+        exit(1)
+
+        
+    # Extract the VD ID using regex
+    match = re.search(r'SANsymphony VD \{([a-fA-F0-9]{32})\}', result.stdout)
+    vd_id = match.group(1)
+    if debug: print(GREEN + f"\tExtracted VD ID: {vd_id}" + NC)
+
+    vd_name = get_vd_info(vd_id) # get the name of the created VD
+    print(GREEN + f"Virtual Disk '{vd_name}' (VD Id: {vd_id}) got created and served to PVE node(s) successfully." + NC)
+
+    # Extract the device name (e.g., sdf) from the symlink target
+    try:
+        for _ in range(10):  # Retry for 10 seconds
+            cmd = f"ls -l /dev/disk/by-id/ | grep {vd_id}"
+
+            try:
+                output = subprocess.check_output(cmd, shell=True, text=True)
+                matches = re.findall(r'-> \.\./\.\./(\w+)', output)
+                if matches:
+                    device_name = matches[0]
+                    break
+            except subprocess.CalledProcessError:
+                pass  # Ignore errors and retry
+            time.sleep(1)
+
+        if debug: print(GREEN + f"\tDevice name for VD ID {vd_id}: /dev/{device_name}" + NC)
+    except subprocess.CalledProcessError as e:
+        print(RED + f"\tError getting the device name of VD {vd_name} (Id: {vd_id}):" + NC)
+        print(f"\t{e.stderr}")
+
+        print(YELLOW + f"Terminating the script by deleting the created '{vd_name}' Virtual Disk..." + NC)
+        remove_lvm_attached_vd(params['LVMname'], vd_name)
+        exit(1)
+
+    return device_name, vd_name
+
+def read_credentials():
+    storage_cfg_file = "/etc/pve/storage.cfg"
+    if not os.path.isfile(storage_cfg_file):
+        print(f"{RED}Storage configuration file not found: {storage_cfg_file}{NC}")
+        return None, None, None
+
+    with open(storage_cfg_file, "r") as file:
+        lines = file.readlines()
+
+    ssy_ip, ssy_user, ssy_pwd = None, None, None
+    in_ssy_section = False
+
+    for line in lines:
+        line = line.strip()
+        if line.startswith("ssy:"):
+            in_ssy_section = True
+        elif in_ssy_section and line.startswith("SSYipAddress"):
+            ssy_ip = line.split()[1]
+        elif in_ssy_section and line.startswith("SSYusername"):
+            ssy_user = line.split()[1]
+        elif in_ssy_section and line.startswith("SSYpassword"):
+            ssy_pwd = line.split()[1]
+        elif line == "":
+            in_ssy_section = False
+
+    return ssy_ip, ssy_user, ssy_pwd
+
+# method returns VD-ID if name is passed and VD-Name if ID is passed
+def get_vd_info(vd_info):
+    server_host, ssy_user, ssy_pwd = read_credentials()
+
+    if debug: print(f"{GREEN}Fetching virtual disks from SSY...{NC}")
+    vdisks = []
+
+    for host in server_host.split(","):
+        host = host.strip()
+        if debug: print(YELLOW + f"Connecting to SSY host: {host} wit credentials {ssy_user}/{ssy_pwd}" + NC)
+
+        try:
+            # Getting the virtual disks from SSY REST API using curl
+            response = subprocess.run(
+                ["curl", "-s", "-m", "3", "-k", "-L", "-H", f"ServerHost: {host}", 
+                "-u", f"{ssy_user}:{ssy_pwd}", f"https://{host}/RestService/rest.svc/1.0/virtualdisks"],
+                stdout=subprocess.PIPE
+            )
+            disks = json.loads(response.stdout.decode())
+            if "ErrorsCode" in disks:
+                print(f"{RED}Unable to gather data from SSY at {host}, please review the credential file{NC}")
+            else:
+                # vdisks.extend(disks)
+                for disk in disks:
+                    if disk.get('Id') == vd_info:
+                        if debug: print(f"{GREEN}Found VD: {disk.get('Caption')} with ID: {disk.get('Id')}{NC}")
+                        return disk.get('Caption')
+                    if disk.get('Caption') == vd_info:
+                        if debug: print(f"{GREEN}Found VD: {disk.get('Caption')} with ID: {disk.get('Id')}{NC}")
+                        return disk.get('Id')
+        except Exception as e:
+            if debug: print(f"{RED}Error fetching virtual disks from {host}: {e}{NC}")
+            pass
+    return None
+
+def get_mpath_device(lvm_name, vd_name, device_name):
+    # Find the multipath device (e.g., mpatho) for the given device (e.g., sdf)
+    try:
+        if debug: print(YELLOW + "\tRestarting multipathd to reload device maps..." + NC)
+        subprocess.run(["systemctl", "restart", "multipathd"], check=True)
+        subprocess.run(["multipath", "-r"], check=True)
+        mpath_device = None
+        for _ in range(10):  # Retry for 10 seconds
+            output = subprocess.check_output(["dmsetup", "deps", "-o", "devname"], text=True)
+            for line in output.splitlines():
+                if line.startswith("mpath") and f"({device_name})" in line:
+                    mpath_device = line.split(":")[0].strip()
+                    break
+            if mpath_device:
+                break
+            if debug: print(YELLOW + "\tWaiting for multipath device to be created..." + NC)
+            time.sleep(1)
+        if mpath_device:
+            if debug: print(YELLOW + f"\tMultipath device for {device_name}: {mpath_device}" + NC)
+        else:
+            print(RED + f"\tCould not find multipath device for {device_name}." + NC)
+
+            print(YELLOW + f"Terminating the script by deleting the created '{vd_name}' Virtual Disk..." + NC)
+            remove_lvm_attached_vd(lvm_name, vd_name)
+            exit(1)
+    except subprocess.CalledProcessError as e:
+        print(RED + f"\tError finding mpath for device /dev/{device_name}:" + NC)
+        print(f"\t{e.stderr}")
+
+        print(YELLOW + f"Terminating the script by deleting the created '{vd_name}' Virtual Disk..." + NC)
+        remove_lvm_attached_vd(lvm_name, vd_name)
+        exit(1)
+
+    return f"/dev/mapper/{mpath_device}"
+
+def select_storage_to_remove():
+    # Parse the output of 'pvesm status' to get storage names
+    try:
+        result = subprocess.run(["pvesm", "status"], check=True, text=True, capture_output=True)
+        print(f"\t{'No.':<4} {'Name':<20} {'Type':<10}")
+        print("\t" + "-" * 36)
+        storage_info = []
+        for idx, line in enumerate(result.stdout.splitlines()[1:], 1):  # Skip header
+            parts = line.split()
+            if len(parts) >= 2:
+                name, stype = parts[0], parts[1]
+            storage_info.append((name, stype))
+            print(f"\t{idx:<4} {name:<20} {stype:<10}")
+    except Exception as e:
+        print(RED + f"Error running 'pvesm status': {e}" + NC)
+        exit(1)
+
+    while True:
+        choice = input(f"Enter the storage name or its index [1-{len(storage_info)}] to remove: ").strip()
+        if choice.isdigit():
+            idx = int(choice)
+            if 1 <= idx <= len(storage_info):
+                storage_name = storage_info[idx - 1][0]
+                storage_type = storage_info[idx - 1][1]
+                break
+            else:
+                print(RED + f"\tInvalid index. Please select a number between 1 and {len(storage_info)}." + NC)
+        else:
+            names = [info[0] for info in storage_info]
+            if choice in names:
+                storage_name = choice
+                break
+            else:
+                print(RED + f"\tStorage '{choice}' not found. Please enter a valid storage name or index." + NC)
+    
+    if debug: print(GREEN + f"\tYou have selected the LVM storage class {YELLOW}'{storage_name}'{NC} of type {YELLOW}'{storage_type}'{NC} for removal." + NC)
+    
+    return storage_name, storage_type
+
+def remove_storage():
+    storage_name, storage_type = select_storage_to_remove()
+    
+    confirm = input(f"Are you sure you want to remove storage {YELLOW}'{storage_name}'{NC}? [y/n]: ").strip().lower()
+    if confirm not in ["y", "yes"]:
+        print(RED + "Operation cancelled by the user." + NC)
+        return
+    
+    if storage_type == "lvm":
+        vgname = get_vgname(storage_name)
+        confirm = input(f"Do you you want to {RED}DELETE{NC} SSY Virtual Disk {YELLOW}'{vgname}'{NC} attached to LVM storage {YELLOW}'{storage_name}'{NC}? [y/n]: ").strip().lower()
+        if confirm not in ["y", "yes"]:
+            print(f"The Virtual Disk {YELLOW}'{vgname}'{NC} is not beeing deleted.")
+        else:
+            remove_lvm_attached_vd(storage_name, vgname)
+
+    print(GREEN + f"\nRemoving storage class '{storage_name}'..." + NC)
+    try:
+        remove_cmd = ["pvesm", "remove", storage_name]
+        if debug: print(YELLOW + f"\tRunning: {' '.join(remove_cmd)}" + NC)
+
+        # Using pvesm remove command to remove the storage class
+        result = subprocess.run(remove_cmd, check=True, text=True, capture_output=True)
+
+        print(GREEN + f"Storage class '{storage_name}' removed successfully." + NC)
+        output_status(storage_name)
+    except subprocess.CalledProcessError as e:
+        print(RED + f"\tError occurred while removing storage '{storage_name}':" + NC)
+        print(f"\t{e.stderr}")
+        exit(1)
+
+def get_vgname(storage_name):
+    try:
+        with open("/etc/pve/storage.cfg", "r") as f:
+            lines = f.readlines()
+
+        in_lvm_section = False
+        for line in lines:
+            line = line.strip()
+            if line == f"lvm: {storage_name}":
+                in_lvm_section = True
+            elif in_lvm_section and line.startswith("vgname"):
+                if debug: print(YELLOW + f"\tFound vgname for storage '{storage_name}': {line.split()[1]}" + NC)
+                return line.split()[1]
+            elif line == "":
+                in_lvm_section = False
+    except Exception as e:
+        print(RED + f"Error reading storage.cfg: {e}" + NC)
+
+    if debug: print(RED + f"Volume group name not found for storage '{storage_name}'." + NC)
+    return None
+
+def remove_lvm_attached_vd(storage_name, vgname):
+    vd_id = get_vd_info(vgname)
+    if not vd_id:
+        if debug: print(RED + f"\tVirtual Disk '{vgname}' not found." + NC)
+        return
+    
+    host_ids = get_host_ids(storage_name)
+    unserve_vd(vgname, vd_id, host_ids)
+    delete_vd(vgname, vd_id, host_ids)
+
+def get_host_ids(storage_name):
+    host_ids = []
+    pve_nodes = None
+
+    try:
+        with open("/etc/pve/storage.cfg", "r") as f:
+            lines = f.readlines()
+
+        in_lvm_section = False
+        for line in lines:
+            line = line.strip()
+            if line.startswith(f"lvm: {storage_name}"):
+                in_lvm_section = True
+            elif in_lvm_section and line.startswith("nodes"):
+                if debug: print(YELLOW + f"\tFound nodes associated with storage '{storage_name}': {line.split()[1]}" + NC)
+                pve_nodes =  line.split()[1]
+                break
+            elif line == "":
+                in_lvm_section = False
+        if pve_nodes is not None:
+            pve_nodes = [node.strip() for node in pve_nodes.split(",")]
+            if debug: print(YELLOW + f"Fetched Nodes from storage.cfg: {', '.join(pve_nodes)}" + NC)
+        else:
+            if debug: print(f"Fetched Nodes from storage.cfg: {pve_nodes}")
+    except Exception as e:
+        print(RED + f"Error reading storage.cfg: {e}" + NC)
+
+    if pve_nodes == None:
+        pve_nodes = [node.strip() for node in os.listdir("/etc/pve/nodes")]
+        if debug: print(YELLOW + f"Available PVE nodes extracted from '/etc/pve/nodes' directory: {', '.join(pve_nodes)}" + NC)
+    if pve_nodes == None:
+        with open("/etc/hostname", "r") as f:
+            pve_nodes = [line.strip() for line in f.readlines()]
+        if debug: print(YELLOW = f"Available PVE hostname as there is no PVE cluster: {', '.join(pve_nodes)}" + NC)
+
+    if debug: print(YELLOW + f"Available PVE nodes: {', '.join(pve_nodes)}" + NC)
+    ssy_hosts = get_ssy_hosts()
+
+    for host in ssy_hosts:
+        for pve in pve_nodes:
+            if host.get('Caption') == pve:
+                host_ids.append(host.get('Id'))
+
+    if host_ids:
+        if debug: print(f"{YELLOW}Found Host ID: {host_ids}{NC}")
+        return host_ids
+    else:
+        print(f"{RED}Did not find the appropriate Host details{NC}")
+        exit(1)
+
+def get_ssy_hosts():
+    server_host, ssy_user, ssy_pwd = read_credentials()
+
+    for ssy in server_host.split(","):
+        ssy = ssy.strip()
+        try:
+            # Getting the hosts using SSY REST API
+            response = subprocess.run(
+                ["curl", "-s", "-m", "3", "-k", "-L", "-H", f"ServerHost: {ssy}", 
+                "-u", f"{ssy_user}:{ssy_pwd}", f"https://{ssy}/RestService/rest.svc/1.0/hosts"],
+                stdout=subprocess.PIPE
+            )
+            output = json.loads(response.stdout.decode())
+            if "ErrorsCode" in output:
+                if debug: print(f"{RED}Error details:\n{NC} {output}")
+            else:
+                if debug: print(f"Fetched Host details:\n{output}")
+                return output
+        except Exception as e:
+            if debug: print(f"{RED}Error fetching the registered PVE Hosts details from {ssy}:{NC}\n{e}")
+            pass
+    return
+
+def unserve_vd(vgname, vd_id, host_ids):
+    server_host, ssy_user, ssy_pwd = read_credentials()
+
+    for ssy in server_host.split(","):
+        ssy = ssy.strip()
+        try:
+            for host_id in host_ids:
+                if debug: print(f"{YELLOW}Unserving Virtual Disk {vd_id} from host {host_id} through ssy server {ssy}...{NC}")
+
+                request_body = json.dumps({
+                    "Operation": "Unserve",
+                    "Host": host_id
+                })
+
+                # Unserving the virtual disk using SSY REST API
+                response = subprocess.run(
+                    ["curl", "-s", "-m", "3", "-k", "-L", "-H", f"ServerHost: {ssy}", 
+                    "-u", f"{ssy_user}:{ssy_pwd}", "-X", "POST", "-d", request_body, 
+                    f"https://{ssy}/RestService/rest.svc/1.0/virtualdisks/{vd_id}"],
+                    stdout=subprocess.PIPE
+                )
+                print(f"{GREEN}Virtual Disk '{vgname}' unserved from host Id: '{host_id}' successfully.{NC}")
+                
+            return
+        except Exception as e:
+            print(f"{RED}Error Unserving the virtual disk from {ssy}:{NC}\n{e}")
+            pass
+    exit(1)
+
+def delete_vd(vgname, vd_id, host_ids):
+    server_host, ssy_user, ssy_pwd = read_credentials()
+
+    if debug: print(f"{YELLOW}Unserving and removing Virtual Disk {vd_id} from {', '.join(host_ids)} ...{NC}")
+    
+    for ssy in server_host.split(","):
+        ssy = ssy.strip()
+        try:
+            # Deleting the virtual disk using SSY REST API
+            response = subprocess.run(
+                    ["curl", "-s", "-m", "3", "-k", "-L", "-H", f"ServerHost: {ssy}", 
+                    "-u", f"{ssy_user}:{ssy_pwd}", "-X", "DELETE",  
+                    f"https://{ssy}/RestService/rest.svc/1.0/virtualdisks/{vd_id}"],
+                    stdout=subprocess.PIPE
+                )
+            print(f"{GREEN}Virtual Disk '{vgname}' got deleted successfully.{NC}")
+            return
+            
+        except Exception as e:
+            if debug: print(f"{RED}Error Deleting the virtual disks from {ssy}:{NC}\n{e}")
+            pass
+    print(f"{RED}Unable to Delete the Virtual Disk '{vgname}' from the registered hosts.{NC}")
+
+def get_nodes_ip(nodes):
+    try:
+        # Get all node IPs from /etc/pve/.members
+        with open("/etc/pve/.members", "r") as f:
+            members = json.load(f)
+        node_ips = []
+        nodelist = members.get("nodelist", {})
+        if nodelist is None: return []
+        
+        if debug: print(YELLOW + f"\tavailable node list: {nodelist}" + NC)
+
+        if nodes.strip().lower() == "all":
+            # Get IPs of all nodes in the cluster
+            for node, info in nodelist.items():
+                if "ip" in info:
+                    node_ips.append(info["ip"])
+                else:
+                    print(RED + f"Warning: Node '{node}' missing IP." + NC)
+        else:
+            # Only include nodes specified in the 'nodes' argument (comma-separated)
+            requested_nodes = [n.strip() for n in nodes.split(",") if n.strip()]
+            for node in requested_nodes:
+                info = nodelist.get(node)
+                if info and "ip" in info:
+                    node_ips.append(info["ip"])
+                else:
+                    print(RED + f"Warning: Node '{node}' not found in cluster or missing IP." + NC)
+    except Exception as e:
+        print(RED + f"Error reading node IPs from /etc/pve/.members: {e}" + NC)
+        exit(1)
+    
+    if debug: print(YELLOW + f"\tFound IPs of selected nodes in the cluster: {', '.join(node_ips)}" + NC)
+
+    return node_ips
+    
+def nodes_rescan_iscsi(nodes_ip):
+    if not nodes_ip:
+        return
+    local_ip = socket.gethostbyname(socket.gethostname())
+    for node in nodes_ip:
+        try:
+            if node != local_ip:
+                # Rescan iSCSI sessions
+                print(GREEN + f"Rescanning iSCSI sessions on node: {node}..." + NC)
+                rescan_cmd = ["ssh", "-o", "StrictHostKeyChecking=no", node, "iscsiadm -m node -R"]
+                rescan_result = subprocess.run(
+                    rescan_cmd,
+                    check=True,
+                    stdout=None if debug else subprocess.DEVNULL,
+                    stderr=None if debug else subprocess.DEVNULL,
+                    text=True
+                )
+        except subprocess.CalledProcessError as e:
+            print(RED + f"Error during iSCSI session rescan on {node}: {e}" + NC)
+            pass
+
+def restart_pve_services(nodes_ip):
+    if not nodes_ip:
+        try:
+            # Restart multipathd
+            print(GREEN + f"Restarting multipathd..." + NC)
+            multipathd_cmd = ["systemctl", "restart", "multipathd"]
+            multipathd_result = subprocess.run(
+                multipathd_cmd,
+                check=True,
+                text=True
+            )
+
+            # Restart Proxmox services
+            print(GREEN + f"Restarting Proxmox services..." + NC)
+            proxmox_cmd = ["systemctl", "restart", "pvedaemon", "pveproxy", "pvestatd", "pvescheduler"]
+            proxmox_result = subprocess.run(
+                proxmox_cmd,
+                check=True,
+                text=True
+            )
+
+            return
+        except subprocess.CalledProcessError as e:
+            print(RED + f"Error during iSCSI session rescan or service restart on {node}: {e}" + NC)
+            exit(1)
+        
+    for node in nodes_ip:
+        try:
+            # Restart multipathd
+            print(GREEN + f"Restarting multipathd on {node}..." + NC)
+            multipathd_cmd = ["ssh", "-o", "StrictHostKeyChecking=no", node, "systemctl restart multipathd"]
+            multipathd_result = subprocess.run(
+                multipathd_cmd,
+                check=True,
+                text=True
+            )
+
+            # Restart Proxmox services
+            print(GREEN + f"Restarting Proxmox services on {node}..." + NC)
+            proxmox_cmd = [
+                "ssh", "-o", "StrictHostKeyChecking=no", node,
+                "systemctl restart pvedaemon pveproxy pvestatd pvescheduler"
+            ]
+            proxmox_result = subprocess.run(
+                proxmox_cmd,
+                check=True,
+                text=True
+            )
+        except subprocess.CalledProcessError as e:
+            print(RED + f"Error during iSCSI session rescan or service restart on {node}: {e}" + NC)
+            exit(1)
+
+def ssy_multipath():
+    try:
+        # Run ssy-multipath script
+        result = subprocess.run(["/usr/bin/ssy-multipath"], check=True, text=True, capture_output=True)
+        if debug: print(GREEN + "SSY multipath command executed successfully." + NC)
+        print(result.stdout)
+    except FileNotFoundError:
+        print(RED + "Error: /usr/bin/ssy-multipath not found." + NC)
+        exit(1)
+    except subprocess.CalledProcessError as e:
+        print(RED + f"Error during multipath operation: {e}" + NC)
+        exit(1)
+
+def ssy_actions(provided_params):
+    params = get_ssy_parameters(provided_params)
+    add_ssy_storage(params)
+
+    nodes_ip = get_nodes_ip(params['nodes'])
+    restart_pve_services(nodes_ip)
+
+    output_status(params['SSYname'])
+
+    return params['SSYname']
+
+def lvm_actions(provided_params):
+    params = get_lvm_parameters(provided_params)
+
+    device_name, vd_name = create_vd(params)
+    nodes_ip = get_nodes_ip(params['nodes'])
+    nodes_rescan_iscsi(nodes_ip)
+    mpath_device = get_mpath_device(params['LVMname'], vd_name, device_name)
+
+    time.sleep(3)  # Wait for multipath to settle
+    create_vg(params['LVMname'], vd_name, mpath_device)
+    add_lvm_storage(params, vd_name)
+    
+    restart_pve_services(nodes_ip)
+    output_status(params['LVMname'])
+
+def parse_arguments():
+    parser = argparse.ArgumentParser(usage="ssy-plugin [ACTION] [OPTIONS...]\n")
+
+    parser.add_argument('action', nargs='?', choices=['ssy', 'lvm', 'remove', 'multipath'], 
+        metavar='ACTION', help='Specify the action to perform: ssy, lvm, remove, or multipath.')
+
+    storage_params = [
+        ("--LVMname", "LVM Storage Class name"),
+        ("--LVMsize", "Size of LVM Storage Class (in GiB)"),
+        ("--SSYname", "SSY Storage Class name"),
+        ("--SSYipAddress", "SANsymphony IP Address"),
+        ("--SSYusername", "SANsymphony Username"),
+        ("--SSYpassword", "SANsymphony Password"),
+        ("--vdTemplateName", "Virtual Disk Template Name"),
+        ("--portals", "iSCSI Portals"),
+        ("--targets", "iSCSI Targets"),
+        ("--nodes", "Proxmox Node names"),
+        ("--shared", "Shared storage?"),
+        ("--disable", "Disable storage class?"),
+        ("--default", "use Default parameters?"),
+    ]
+
+    for param, help_text in storage_params:
+        parser.add_argument(param, metavar="", help=help_text, required=False)
+
+    args, _ = parser.parse_known_args()
+    return vars(args)
+
+def main():
+    args = parse_arguments()
+
+    provided_params = {key: value for key, value in args.items() if key != "action"}
+
+    action = args.get("action") if args.get("action") else select_action()
+
+    if action == "ssy":
+        ssy_actions(provided_params)
+    elif action == "lvm":
+        lvm_actions(provided_params)
+    elif action == "remove":
+        remove_storage()
+    elif action == "multipath":
+        ssy_multipath()
+
+debug = 0
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print(RED + "\nProgram interrupted by user. Exiting gracefully." + NC)
+        exit(0)
