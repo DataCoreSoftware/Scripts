@@ -46,7 +46,7 @@ Key capabilities include:
 
 If installing via `.deb`:
 - Install `jq` and `multipath-tools` manually.
-- Configure `multipath`, `iSCSI Settings` and `udev rules` manually (see [Host Configuration Guide](https://dcsw.atlassian.net/wiki/spaces/ProxmoxDoc/pages/8528330757/Host+Configuration+Guide+PVE)).
+- Configure `multipath`, `iSCSI Settings` and `udev rules` manually (see [Host Configuration Guide](https://docs.datacore.com/SSV-WebHelp/SSV-WebHelp/FAQ/Host-Configuration-Guide/Proxmox_Configuration_Guide.htm)).
 
 <br/>
 
