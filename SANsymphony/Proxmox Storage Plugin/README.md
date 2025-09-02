@@ -1,26 +1,25 @@
 # DataCore Storage Plugin for Proxmox VE
 
-A Proxmox VE storage plugin to integrate [DataCore SANsymphony™](https://www.datacore.com/products/sansymphony/) storage using iSCSI, with native multipath support and custom CLI management.
-
----
-
-Note: All the mentioned installation destination will be changed to the same github repo once we publish the plugin and we will also attach the Web help link once its live
--
+A Proxmox VE storage plugin to integrate [DataCore SANsymphony™](https://www.datacore.com/products/sansymphony/) storage using **iSCSI**, with multipath support and custom CLI management.
 
 ---
 
 ## 📚 Table of Contents
 
 1. [Overview](#-overview)
-3. [Prerequisites](#%EF%B8%8F-prerequisites)
-4. [Installation](#-installation)
+2. [Prerequisites](#%EF%B8%8F-prerequisites)
+3. [Installation](#-installation)
    - [Using APT Repository (Recommended)](#-recommended-using-apt-repository)
    - [Using Debian Package (.deb)](#-alternative-debian-package-deb)
-5. [Configuration](#%EF%B8%8F-configuration)
+4. [Configuration](#%EF%B8%8F-configuration)
    - [Using ssy-plugin (Recommended)](#-recommended-using-ssy-plugin-command)
    - [Using pvesm add command](#-using-pvesm-add-command)
    - [Manual storage.cfg editing](#-manually-editing-storage-configuration-file-etcpvestoragecfg)
-7. [Troubleshooting](#-troubleshooting)
+5. [Troubleshooting](#-troubleshooting)
+
+<br/>
+
+For complete Documentaion Refer [SANsymphony Storage Plugin for Proxmox](https://docs.datacore.com/SANsymphony-Storage-Plugin-for-Proxmox-WebHelp/Proxmox-Plugin/WebHelp/Overview.htm)
 
 ---
 
@@ -31,10 +30,12 @@ Note: All the mentioned installation destination will be changed to the same git
 The plugin enables shared iSCSI storage managed by DataCore SANsymphony to be used directly from Proxmox VE. You can manage storage via the Proxmox UI/CLI or using the built-in `ssy-plugin` command-line interface.
 
 Key capabilities include:
-- Management of multiple iSCSI sessions with multipath support
+- Configure [Udev Rules](https://docs.datacore.com/SSV-WebHelp/SSV-WebHelp/FAQ/Host-Configuration-Guide/Proxmox_Configuration_Guide.htm#SCSI), [iSCSI Settings](https://docs.datacore.com/SSV-WebHelp/SSV-WebHelp/FAQ/Host-Configuration-Guide/Proxmox_Configuration_Guide.htm?Highlight=Proxmox#iSCSI) and [SCSI Multipath](https://docs.datacore.com/SSV-WebHelp/SSV-WebHelp/FAQ/Host-Configuration-Guide/Proxmox_Configuration_Guide.htm?Highlight=Proxmox#iSCSI2)
+- Management of multiple iSCSI sessions
 - Seamless provisioning of shared Virtual Disks (VDs)
+- Dynamic provisioning of VD through Raw Device Mapping
 - LVM support on top of SANsymphony VDs
-- Compatibility with both Proxmox UI and CLI
+- Compatibility with Proxmox UI and CLI
 - An interactive wrapper CLI tool (`ssy-plugin`) for simplified management
 
 <br/>
@@ -45,7 +46,7 @@ Key capabilities include:
 
 If installing via `.deb`:
 - Install `jq` and `multipath-tools` manually.
-- Enable `multipath` and configure `udev rules` manually (see [Host Configuration Guide](https://dcsw.atlassian.net/wiki/spaces/ProxmoxDoc/pages/8528330757/Host+Configuration+Guide+PVE)).
+- Configure `multipath`, `iSCSI Settings` and `udev rules` manually (see [Host Configuration Guide](https://dcsw.atlassian.net/wiki/spaces/ProxmoxDoc/pages/8528330757/Host+Configuration+Guide+PVE)).
 
 <br/>
 
@@ -57,14 +58,12 @@ Run these commands **on each Proxmox node**:
 
 ### 1. Import GPG Key
 ```bash
-wget -P /usr/share/keyrings https://cjsstorage.blob.core.windows.net/datacore/ssy-pgp-key.public
+wget -P /usr/share/keyrings https://github.com/DataCoreSoftware/Scripts/releases/download/SSY_PVE_Plugin/ssy-pgp-key.public
 ```
 
 ### 2. Add Apt Source
 ```bash
-echo "deb [signed-by=/usr/share/keyrings/ssy-pgp-key.public] \
-https://cjsstorage.blob.core.windows.net/datacore/ssy-apt-repo stable main" \
-| tee /etc/apt/sources.list.d/ssy.list
+echo "deb [signed-by=/usr/share/keyrings/ssy-pgp-key.public] https://datacoresoftware.github.io/Scripts/ssy-apt-repo stable main" | tee /etc/apt/sources.list.d/ssy.list
 ```
 
 ### 3. Update & Install Plugin
@@ -79,7 +78,7 @@ Use this method if you cannot access the apt repo from the PVE node.
 
 ### 1. Download the package
 ```bash
-wget https://cjsstorage.blob.core.windows.net/datacore/SANsymphony-plugin_1.0.0_amd64.deb
+wget https://github.com/DataCoreSoftware/Scripts/releases/download/SSY_PVE_Plugin/SANsymphony-plugin_1.0.0_amd64.deb
 ```
 
 ### 2. Install it
