@@ -2,8 +2,6 @@
 
 A Proxmox VE storage plugin to integrate [DataCore SANsymphony™](https://www.datacore.com/products/sansymphony/) storage using **iSCSI**, with multipath support and custom CLI management.
 
----
-
 ## 📚 Table of Contents
 
 1. [Overview](#-overview)
@@ -19,9 +17,9 @@ A Proxmox VE storage plugin to integrate [DataCore SANsymphony™](https://www.d
 
 <br/>
 
-For complete Documentaion Refer [SANsymphony Storage Plugin for Proxmox](https://docs.datacore.com/SANsymphony-Storage-Plugin-for-Proxmox-WebHelp/Proxmox-Plugin/WebHelp/Overview.htm)
-
----
+References
+- [SANsymphony Storage Plugin for Proxmox](https://docs.datacore.com/SANsymphony-Storage-Plugin-for-Proxmox-WebHelp/Proxmox-Plugin/WebHelp/Overview.htm) – Complete Proxmox plugin configuration details.
+- [Proxmox Host Configuration Guide](https://docs.datacore.com/SSV-WebHelp/SSV-WebHelp/FAQ/Host-Configuration-Guide/Proxmox_Configuration_Guide.htm) – Host setup, network configuration instructions and more.
 
 <br/>
 
@@ -42,19 +40,25 @@ Key capabilities include:
 
 # ⚠️ Prerequisites
 
-- Ensure the `VD Template` is already created in SANsymphony.
-
-If installing via `.deb`:
-- Install `jq` and `multipath-tools` manually.
-- Configure `multipath`, `iSCSI Settings` and `udev rules` manually (see [Host Configuration Guide](https://docs.datacore.com/SSV-WebHelp/SSV-WebHelp/FAQ/Host-Configuration-Guide/Proxmox_Configuration_Guide.htm)).
+Before using the plugin, ensure the following:
+- Ensure that a **Virtual Disk Template** is available or create one to use with the plugin.
+- If installing the plugin via the **.deb** package, you must install the below packages.
+  ```bash
+  apt update
+  apt install jq 
+  apt install multipath-tools
+  ```
 
 <br/>
 
 # 📦 Installation
 
+>[!IMPORTANT]
+> In a cluster setup, plugin installation needs to be performed on all the nodes.
+
 ## ✅ Recommended: Using APT Repository
 
-Run these commands **on each Proxmox node**:
+>This method ensures automatic updates and integrates the plugin into the Proxmox package management system, making future updates and management much easier.
 
 ### 1. Import GPG Key
 ```bash
@@ -74,7 +78,7 @@ apt install ssy-plugin
 
 ## 🗂 Alternative: Debian Package (.deb)
 
-Use this method if you cannot access the apt repo from the PVE node.
+> Use this method if you cannot access the apt repo from the PVE node.
 
 ### 1. Download the package
 ```bash
@@ -90,7 +94,7 @@ dpkg -i SANsymphony-plugin_1.0.0_amd64.deb
 
 # ⚙️ Configuration
 
-> [!TIP]
+>[!NOTE]
 > In a cluster setup, configuration only needs to be performed on one node.
 
 After installing the plugin, configure Proxmox VE to use it. Since Proxmox VE does not currently support adding custom storage plugins via the GUI, use the `pvesm` command or the built-in `ssy-plugin` command:
