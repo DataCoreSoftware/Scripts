@@ -36,6 +36,9 @@ Key capabilities include:
 - Compatibility with Proxmox UI and CLI
 - An interactive wrapper CLI tool (`ssy-plugin`) for simplified management
 
+>[!IMPORTANT]
+> The SANsymphony Custom Storage Plugin 1.0.0 has been validated and tested with Proxmox version 8.
+
 <br/>
 
 # ⚠️ Prerequisites
@@ -213,9 +216,9 @@ pvesm add ssy <SSY Storage Class Name> \
 
 ```bash
 ssy: <SSY Storage Class Name>
-   DCipAddress <SSY Management IP Address list>
-   DCusername <SSY Username>
-   DCpassword <SSY Password>
+   SSYipAddress <SSY Management IP Address list>
+   SSYusername <SSY Username>
+   SSYpassword <SSY Password>
    portals <SSY FrontEnd iSCSI portals list>
    targets <SSY FrontEnd iSCSI Target IQN list>
    vdTemplateName <SSY Virtual Disk Template Name>
@@ -240,9 +243,9 @@ ssy: <SSY Storage Class Name>
 **Example:**
 ```
 ssy: Storage-Name
-   DCipAddress 10.15.1.19,10.15.1.18
-   DCusername administrator
-   DCpassword Password
+   SSYipAddress 10.15.1.19,10.15.1.18
+   SSYusername administrator
+   SSYpassword Password
    portals 10.15.1.17,10.151.1.16
    targets iqn.2000-08.com.datacore:ssy1-1,iqn.2000-08.com.datacore:ssy2-1
    vdTemplateName SSY-VDT
