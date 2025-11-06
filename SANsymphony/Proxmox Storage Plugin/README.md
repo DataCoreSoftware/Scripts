@@ -37,7 +37,7 @@ Key capabilities include:
 - An interactive wrapper CLI tool (`ssy-plugin`) for simplified management
 
 >[!IMPORTANT]
-> The SANsymphony Custom Storage Plugin 1.0.0 has been validated and tested with Proxmox version 8.
+> The SANsymphony Custom Storage Plugin 1.0.1 has been validated and tested with Proxmox version 8 and 9.
 
 <br/>
 
