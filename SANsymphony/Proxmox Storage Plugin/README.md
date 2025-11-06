@@ -85,12 +85,12 @@ apt install ssy-plugin
 
 ### 1. Download the package
 ```bash
-wget https://github.com/DataCoreSoftware/Scripts/releases/download/SSY_PVE_Plugin/SANsymphony-plugin_1.0.0_amd64.deb
+wget https://github.com/DataCoreSoftware/Scripts/releases/download/SSY_PVE_Plugin/SANsymphony-plugin_1.0.1_amd64.deb
 ```
 
 ### 2. Install it
 ```bash
-dpkg -i SANsymphony-plugin_1.0.0_amd64.deb
+dpkg -i SANsymphony-plugin_1.0.1_amd64.deb
 ```
 
 <br/>
