@@ -1,0 +1,17 @@
+#!/bin/bash
+set -e
+
+# appling datacore recommended iSCSI configuration settings.
+/usr/bin/ssy-configure-iscsid apply
+
+# Reloading udev rules after adding datacore udev rules.
+echo "Reloading udev rules..."
+udevadm control --reload-rules
+udevadm trigger --subsystem-match=block
+
+
+# Restart multipath-tools after the config file was updated
+echo "Reloading the multipath configuration..."
+multipath -r
+
+exit 0

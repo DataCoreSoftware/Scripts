@@ -37,7 +37,7 @@ Key capabilities include:
 - An interactive wrapper CLI tool (`ssy-plugin`) for simplified management
 
 >[!IMPORTANT]
-> The SANsymphony Custom Storage Plugin 1.0.0 has been validated and tested with Proxmox version 8.
+> The SANsymphony Custom Storage Plugin 1.0.1 has been validated and tested with Proxmox version 8 and 9.
 
 <br/>
 
@@ -85,12 +85,12 @@ apt install ssy-plugin
 
 ### 1. Download the package
 ```bash
-wget https://github.com/DataCoreSoftware/Scripts/releases/download/SSY_PVE_Plugin/SANsymphony-plugin_1.0.0_amd64.deb
+wget https://github.com/DataCoreSoftware/Scripts/releases/download/SSY_PVE_Plugin/SANsymphony-plugin_1.0.1_amd64.deb
 ```
 
 ### 2. Install it
 ```bash
-dpkg -i SANsymphony-plugin_1.0.0_amd64.deb
+dpkg -i SANsymphony-plugin_1.0.1_amd64.deb
 ```
 
 <br/>
