@@ -9,7 +9,7 @@ A Proxmox VE storage plugin to integrate [DataCore SANsymphony™](https://www.d
 3. [Installation](#-installation)
    - [Using APT Repository (Recommended)](#-recommended-using-apt-repository)
    - [Using Debian Package (.deb)](#-alternative-debian-package-deb)
-   - [Configuration Updates Performed After Plugin Installation]()
+   - [Configuration Updates Performed After Plugin Installation](#🛠️-configuration-updates-performed-after-plugin-installation)
 4. [Configuration](#%EF%B8%8F-configuration)
    - [Using ssy-plugin (Recommended)](#-recommended-using-ssy-plugin-command)
    - [Using pvesm add command](#-using-pvesm-add-command)
