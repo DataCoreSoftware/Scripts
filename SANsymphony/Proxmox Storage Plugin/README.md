@@ -9,6 +9,7 @@ A Proxmox VE storage plugin to integrate [DataCore SANsymphony™](https://www.d
 3. [Installation](#-installation)
    - [Using APT Repository (Recommended)](#-recommended-using-apt-repository)
    - [Using Debian Package (.deb)](#-alternative-debian-package-deb)
+   - [Configuration Updates Performed After Plugin Installation]()
 4. [Configuration](#%EF%B8%8F-configuration)
    - [Using ssy-plugin (Recommended)](#-recommended-using-ssy-plugin-command)
    - [Using pvesm add command](#-using-pvesm-add-command)
@@ -37,7 +38,7 @@ Key capabilities include:
 - An interactive wrapper CLI tool (`ssy-plugin`) for simplified management
 
 >[!IMPORTANT]
-> The SANsymphony Custom Storage Plugin 1.0.1 has been validated and tested with Proxmox version 8 and 9.
+> The SANsymphony Custom Storage Plugin 1.0.1 has been validated and tested with Proxmox VE versions 8 and 9.0.3. If you upgrade or install Proxmox VE to a version higher than 9.0.3, you may see the following warning message: "PVE::Storage::Custom::SANsymphonyPlugin is implementing an older storage API; an upgrade is recommended". This warning is informational and does not typically impact the functionality of the plugin.
 
 <br/>
 
@@ -91,6 +92,98 @@ wget https://github.com/DataCoreSoftware/Scripts/releases/download/SSY_PVE_Plugi
 ### 2. Install it
 ```bash
 dpkg -i SANsymphony-plugin_1.0.1_amd64.deb
+```
+
+## 🛠️ Configuration Updates Performed After Plugin Installation
+
+When the SANsymphony Custom Storage plugin is installed using any of the supported methods (APT repository or DPKG package), the installer updates several host-level configurations immediately after the installation completes.
+
+These updates are required for proper operation of SANsymphony storage with Proxmox VE and are applied as soon as the plugin is installed, without requiring manual configuration. The following sections describe the configuration changes that are applied during installation.
+
+### iSCSI Settings
+
+On Proxmox VE nodes, the iSCSI service does not start automatically by default after a system reboot. During installation of the SANsymphony Custom Storage plugin, the installer updates the iSCSI configuration to ensure reliable connectivity to SANsymphony storage.
+
+- Configures the iSCSI initiator to start automatically by updating the /etc/iscsi/iscsid.conf file:
+  ```
+  node.startup = manual 
+  node.leading_login = No
+  ```
+- Updates the session replacement timeout from the default value of node.session.timeo.replacement_timeout (120 seconds) to the recommended value of 15 seconds.
+  ```
+  node.session.timeo.replacement_timeout = 15
+  ```
+- Increases the initial login retry count to the recommended value of node.session.initial_login_retry_max (64) to handle scenarios where a port reinitialization prevents automatic login.
+  ```
+  node.session.initial_login_retry_max = 64
+  ```
+  These changes are applied automatically by the plugin immediately after installation and do not require manual configuration. 
+- A backup of the original iscsid.conf file is stored at the following location:
+  ```
+  /tmp/iscsid.conf
+  ```
+
+### iSCSI Multipath Configuration
+
+To ensure high availability and proper path management for SANsymphony virtual disks, the plugin installation updates the multipath configuration on the Proxmox VE node immediately after installation.
+
+As part of the installation, the plugin creates or updates the multipath configuration file at the following location:
+```
+/etc/multipath.conf
+```
+
+The configuration applied includes DataCore-recommended defaults and device-specific settings equivalent to the following:
+```
+defaults {
+    user_friendly_names    yes
+    polling_interval       60
+    find_multipaths        "smart"
+}
+
+blacklist {
+    devnode "^(ram|raw|loop|fd|md|dm-|sr|scd|st)[0-9]*"
+    devnode "^hd[a-z]"
+}
+
+devices {
+    device {
+        vendor               "DataCore"
+        product              "Virtual Disk"
+        path_checker          tur
+        prio                  alua
+        failback              10
+        no_path_retry         fail
+        dev_loss_tmo          60
+        fast_io_fail_tmo      5
+        rr_min_io_rq          100
+        path_grouping_policy  group_by_prio
+    }
+}
+```
+
+### Multipath Service Restart
+
+After applying the multipath configuration, the installer restarts the multipath service, so the changes take effect immediately:
+```
+multipath -r
+```
+
+### Custom udev Rule for DataCore Disks
+
+During installation, the plugin adds a custom udev rule to ensure appropriate SCSI timeout handling for SANsymphony virtual disks.
+
+The following file is created or updated as part of the installation:
+```
+/etc/udev/rules.d/99-datacore.rules
+```
+With the following rule:
+```
+SUBSYSTEM=="block", ACTION=="add", ATTRS{vendor}=="DataCore", ATTRS{model}=="Virtual Disk    ", RUN+="/bin/sh -c 'echo 80 > /sys/block/%k/device/timeout' "
+```
+The udev rules are reloaded automatically by the SANsymphony Custom Storage Plugin so the changes take effect immediately.
+```
+udevadm control --reload-rules
+udevadm trigger --subsystem-match=block
 ```
 
 <br/>
