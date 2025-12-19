@@ -38,7 +38,7 @@ Key capabilities include:
 - An interactive wrapper CLI tool (`ssy-plugin`) for simplified management
 
 >[!IMPORTANT]
-> The SANsymphony Custom Storage Plugin 1.0.1 has been validated and tested with Proxmox VE versions 8 and 9.0.3. If you upgrade or install Proxmox VE to a version higher than 9.0.3, you may see the following warning message: "PVE::Storage::Custom::SANsymphonyPlugin is implementing an older storage API; an upgrade is recommended". This warning is informational and does not typically impact the functionality of the plugin.
+> The SANsymphony Custom Storage Plugin 1.0.1 has been validated and tested with Proxmox VE versions **8** and **9.0.3**. If you upgrade or install Proxmox VE to a version higher than **9.0.3**, you may see the following warning message: "**PVE::Storage::Custom::SANsymphonyPlugin is implementing an older storage API; an upgrade is recommended**". This warning is informational and does not typically impact the functionality of the plugin.
 
 <br/>
 
@@ -104,28 +104,29 @@ These updates are required for proper operation of SANsymphony storage with Prox
 
 On Proxmox VE nodes, the iSCSI service does not start automatically by default after a system reboot. During installation of the SANsymphony Custom Storage plugin, the installer updates the iSCSI configuration to ensure reliable connectivity to SANsymphony storage.
 
-- Configures the iSCSI initiator to start automatically by updating the /etc/iscsi/iscsid.conf file:
+- Configures the iSCSI initiator to start automatically by updating the `/etc/iscsi/iscsid.conf` file:
   ```
   node.startup = manual 
   node.leading_login = No
   ```
-- Updates the session replacement timeout from the default value of node.session.timeo.replacement_timeout (120 seconds) to the recommended value of 15 seconds.
+- Updates the session replacement timeout from the default value of **node.session.timeo.replacement_timeout** (**120** seconds) to the recommended value of **15** seconds.
   ```
   node.session.timeo.replacement_timeout = 15
   ```
-- Increases the initial login retry count to the recommended value of node.session.initial_login_retry_max (64) to handle scenarios where a port reinitialization prevents automatic login.
+- Increases the initial login retry count to the recommended value of **node.session.initial_login_retry_max** (**64**) to handle scenarios where a port reinitialization prevents automatic login.
   ```
   node.session.initial_login_retry_max = 64
   ```
   These changes are applied automatically by the plugin immediately after installation and do not require manual configuration. 
-- A backup of the original iscsid.conf file is stored at the following location:
+- A backup of the original `iscsid.conf` file is stored at the following location:
   ```
   /tmp/iscsid.conf
   ```
+For more information, refer to the [iSCSI Settings](https://docs.datacore.com/SSV-WebHelp/SSV-WebHelp/FAQ/Host-Configuration-Guide/Proxmox_Configuration_Guide.htm#iSCSI) section in the Proxmox Configuration Guide. 
 
 ### iSCSI Multipath Configuration
 
-To ensure high availability and proper path management for SANsymphony virtual disks, the plugin installation updates the multipath configuration on the Proxmox VE node immediately after installation.
+To ensure high availability and proper path management for SANsymphony virtual disks, the plugin installation updates the multipath configuration on the Proxmox VE node immediately after installation. Refer to [iSCSI Multipath](https://docs.datacore.com/SSV-WebHelp/SSV-WebHelp/FAQ/Host-Configuration-Guide/Proxmox_Configuration_Guide.htm#iSCSI2) for more information.
 
 As part of the installation, the plugin creates or updates the multipath configuration file at the following location:
 ```
