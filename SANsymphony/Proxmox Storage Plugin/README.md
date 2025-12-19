@@ -9,8 +9,8 @@ A Proxmox VE storage plugin to integrate [DataCore SANsymphony™](https://www.d
 3. [Installation](#-installation)
    - [Using APT Repository (Recommended)](#-recommended-using-apt-repository)
    - [Using Debian Package (.deb)](#-alternative-debian-package-deb)
-   - [Configuration Updates Performed After Plugin Installation](#%EF%B8%8F-configuration-updates-performed-after-plugin-installation)
-4. [Configuration](#%EF%B8%8F-configuration)
+   - [Configuration Updates Performed After Plugin Installation](#%EF%B8%8F-proxmox-configuration-updates-performed-after-plugin-installation)
+4. [Plugin Configuration](#%EF%B8%8F-plugin-configuration)
    - [Using ssy-plugin (Recommended)](#-recommended-using-ssy-plugin-command)
    - [Using pvesm add command](#-using-pvesm-add-command)
    - [Manual storage.cfg editing](#-manually-editing-storage-configuration-file-etcpvestoragecfg)
@@ -94,7 +94,7 @@ wget https://github.com/DataCoreSoftware/Scripts/releases/download/SSY_PVE_Plugi
 dpkg -i SANsymphony-plugin_1.0.1_amd64.deb
 ```
 
-## 🛠️ Configuration Updates Performed After Plugin Installation
+## 🛠️ Proxmox Configuration Updates Performed After Plugin Installation
 
 When the SANsymphony Custom Storage plugin is installed using any of the supported methods (APT repository or DPKG package), the installer updates several host-level configurations immediately after the installation completes.
 
@@ -188,7 +188,7 @@ udevadm trigger --subsystem-match=block
 
 <br/>
 
-# ⚙️ Configuration
+# ⚙️ Plugin Configuration
 
 >[!NOTE]
 > In a cluster setup, configuration only needs to be performed on one node.
