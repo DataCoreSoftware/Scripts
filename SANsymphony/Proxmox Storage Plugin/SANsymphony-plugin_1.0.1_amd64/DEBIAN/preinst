@@ -1,0 +1,26 @@
+#!/bin/bash
+
+TMP_DIR="/tmp/SANsymphony-Plugin-Backup"
+ISCSI_CONF="/etc/iscsi/iscsid.conf"
+MULTIPATH_CONF="/etc/multipath.conf"
+
+echo "Creating ${TMP_DIR} folder for creating backup..."
+mkdir -p "$TMP_DIR"
+
+
+# Take backup of iSCSI config
+if [[ -f "$ISCSI_CONF" ]]; then
+    echo "File ${ISCSI_CONF} exists, copying to ${TMP_DIR}..."
+    cp "$ISCSI_CONF" "$TMP_DIR"
+else
+    echo "File ${ISCSI_CONF} does not exist, skipping backup..."
+fi
+
+
+# Take backup of multipath config
+if [[ -f "$MULTIPATH_CONF" ]]; then
+    echo "Copying ${MULTIPATH_CONF} to ${TMP_DIR}..."
+    cp "$MULTIPATH_CONF" "$TMP_DIR"
+else
+    echo "File ${MULTIPATH_CONF} does not exist, skipping backup..."
+fi
