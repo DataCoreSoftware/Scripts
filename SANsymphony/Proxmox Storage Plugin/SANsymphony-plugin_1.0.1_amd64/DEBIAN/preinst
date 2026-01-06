@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
 
 TMP_DIR="/tmp/SANsymphony-Plugin-Backup"
 ISCSI_CONF="/etc/iscsi/iscsid.conf"
