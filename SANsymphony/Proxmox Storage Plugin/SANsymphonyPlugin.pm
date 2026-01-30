@@ -9,9 +9,21 @@ use PVE::Tools qw(run_command file_read_firstline trim dir_glob_regex dir_glob_f
 use PVE::Storage::ISCSIPlugin;
 use base qw(PVE::Storage::Plugin);
 
+# Example: 192.168.122.252:3260,1 iqn.2003-01.org.linux-iscsi.proxmox-nfs.x8664:sn.00567885ba8f
+my $ISCSI_TARGET_RE = qr/^((?:$IPV4RE|\[$IPV6RE\]):\d+)\,\S+\s+(\S+)\s*$/;
+my $rescan_filename = "/var/run/ssy-iscsi-rescan.lock";
+my $vd_id;
+my $DEBUG = 1;
+my $default_protocol = 'iscsi';
+
+my $ISCSIADM = '/usr/bin/iscsiadm';
+my $found_iscsi_adm_exe;
+my $NVME = '/usr/sbin/nvme';
+my $found_nvme_exe;
+
 sub api {
     my $minver = 3;
-    my $maxver = 12;
+    my $maxver = 13;
 
     my $apiver;
     eval {
@@ -60,11 +72,11 @@ sub properties {
 		    type => 'string',
 		},
 		portals => {
-		    description => "comma separated iSCSI portals (IP or DNS name with optional port).",
+		    description => "comma separated iSCSI/NVMe portals (IP or DNS name with optional port).",
 		    type => 'string',
 		},
 		targets => {
-		    description => "comma separated iSCSI targets",
+		    description => "comma separated iSCSI/NVMe targets",
 		    type => 'string',
 		},
         SSYusername => {
@@ -79,6 +91,11 @@ sub properties {
 		    description => "Name of the VD Template to be used",
 		    type => 'string',
 		},
+        protocol => {
+        description => "Set storage protocol ( iscsi | nvme )",
+        type        => 'string',
+        default     => $default_protocol
+        },
     };
 }
 
@@ -94,16 +111,9 @@ sub options {
         shared => { optional => 1 },
         disable => { optional => 1},
         content => { optional => 1},
+        protocol  => { optional => 1 },
     };
 }
-
-# Example: 192.168.122.252:3260,1 iqn.2003-01.org.linux-iscsi.proxmox-nfs.x8664:sn.00567885ba8f
-my $ISCSI_TARGET_RE = qr/^((?:$IPV4RE|\[$IPV6RE\]):\d+)\,\S+\s+(\S+)\s*$/;
-my $rescan_filename = "/var/run/ssy-iscsi-rescan.lock";
-my $ISCSIADM = '/usr/bin/iscsiadm';
-my $found_iscsi_adm_exe;
-my $vd_id;
-my $debug = 1;
 
 my sub assert_iscsi_support {
     my ($noerr) = @_;
@@ -113,8 +123,26 @@ my sub assert_iscsi_support {
 
     if (!$found_iscsi_adm_exe) {
         die "error: no iscsi support - please install open-iscsi\n" if !$noerr;
+        warn "warning: no iscsi support - please install open-iscsi\n";
     }
     return $found_iscsi_adm_exe;
+}
+
+sub assert_nvme_support {
+    my ($noerr) = @_;
+    print "Debug :: PVE::Storage::Custom::SANsymphonyPlugin::sub::assert_nvme_support\n" if $DEBUG;
+
+    return $found_nvme_exe if $found_nvme_exe;
+    # return $found_iscsi_adm_exe if $found_iscsi_adm_exe; # assume it won't be removed if ever found 
+
+    $found_nvme_exe = -x $NVME;
+
+    if (!$found_nvme_exe) {
+        die "error: no nvme support - please install nvme-cli\n" if !$noerr;
+        warn "warning: no nvme support - please install nvme-cli\n";
+    }
+
+    return $found_nvme_exe;
 }
 
 sub status {
@@ -130,7 +158,7 @@ sub status {
         last if $active eq 1;
     }
 
-    return (0, 0, 0, $active);
+    return (0, 0, 0, $active ? 1 : 0);
 }
 
 sub iscsi_discovery {
@@ -274,6 +302,33 @@ sub iscsi_session {
 sub activate_storage {
     my ($class, $storeid, $scfg, $cache) = @_;
 
+    if ($scfg->{protocol} && $scfg->{protocol} eq 'nvme') {
+        activate_nvme_storage($storeid, $scfg, $cache);
+    }
+    else {
+        activate_iscsi_storage($storeid, $scfg, $cache);
+    }
+
+    ssy_register_host($scfg);
+
+    run_command(['multipath', '-r'], outfunc => sub {});
+
+    delete_stale_virtual_disks();
+}
+
+sub activate_nvme_storage {
+    my ($storeid, $scfg, $cache) = @_;
+    print "Debug :: PVE::Storage::Custom::SANsymphonyPlugin::sub::activate_nvme_storage\n" if $DEBUG;
+
+    return if !assert_nvme_support(1);
+
+    die "NVMe protocol support is not implemented yet\n";
+}
+
+sub activate_iscsi_storage {
+    my ($storeid, $scfg, $cache) = @_;
+    print "Debug :: PVE::Storage::Custom::SANsymphonyPlugin::sub::activate_iscsi_storage\n" if $DEBUG;
+    
     return if !assert_iscsi_support(1);
 
     my @ssy_session_list;
@@ -305,12 +360,6 @@ sub activate_storage {
     }
 
     iscsi_session_rescan(0, @ssy_session_list) if scalar @ssy_session_list;
-
-    ssy_register_host($scfg);
-
-    run_command(['multipath', '-r'], outfunc => sub {});
-
-    delete_stale_virtual_disks();
 }
 
 sub delete_stale_virtual_disks {
@@ -361,8 +410,8 @@ sub delete_stale_virtual_disks {
 
         return if $has_holders;  # Skip devices in use by dm/LVM/etc.
 
-        print "Stale device $dev_name detected (size=0, vendor='$vendor', model='$model', holders=None)\n" if $debug;
-        print "Deleting stale device $dev_name\n" if $debug;
+        print "Stale device $dev_name detected (size=0, vendor='$vendor', model='$model', holders=None)\n" if $DEBUG;
+        print "Deleting stale device $dev_name\n" if $DEBUG;
 
         run_command(["echo 1 > /sys/block/$dev_name/device/delete"], outfunc => sub {});
     });

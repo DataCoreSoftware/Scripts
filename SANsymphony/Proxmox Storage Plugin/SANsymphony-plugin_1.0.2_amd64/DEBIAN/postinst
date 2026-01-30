@@ -1,0 +1,37 @@
+#!/bin/bash
+
+set -e
+
+#DEBHELPER#
+
+case "$1" in
+	configure)
+        # applying datacore recommended iSCSI configuration settings.
+        /usr/bin/ssy-configure-iscsid apply
+
+        # Reload udev rules
+        if command -v udevadm >/dev/null; then
+            echo "Reloading udev rules..."
+            udevadm control --reload-rules
+            udevadm trigger --subsystem-match=block
+        fi
+
+        # Reload multipath maps
+        if command -v multipath >/dev/null; then
+            echo "Reloading the multipath configuration..."
+            multipath -r
+        fi
+
+        # Reload or restart Proxmox services to apply changes, ignoring failures
+        echo "Reloading the necessary Proxmox daemon services…"
+
+        deb-systemd-invoke reload-or-try-restart pvedaemon.service || true
+		deb-systemd-invoke reload-or-try-restart pveproxy.service || true
+		deb-systemd-invoke reload-or-try-restart pvestatd.service || true
+		deb-systemd-invoke reload-or-try-restart pvescheduler.service || true
+		deb-systemd-invoke reload-or-try-restart pve-ha-lrm.service || true
+		;;
+
+	*)
+		;;
+esac
