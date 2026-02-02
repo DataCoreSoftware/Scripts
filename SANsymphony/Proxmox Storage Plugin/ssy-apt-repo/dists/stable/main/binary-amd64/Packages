@@ -1,14 +1,14 @@
 Package: ssy-plugin
 Source: ssy-plugin
-Version: 1.0.1
+Version: 1.0.2
 Architecture: amd64
 Maintainer: Chiranth J S <chiranth.js@datacore.com>
 Depends: python3 (>= 3.6), jq, open-iscsi, multipath-tools
-Filename: pool/main/SANsymphony-plugin_1.0.1_amd64.deb
-Size: 19564
-MD5sum: 8b6a2e24b2983425a86f5a59979d0411
-SHA1: 05f872964e143905e1ee30708bc8ad31b098c08a
-SHA256: bed8fc8428415ac60777d0755ebad2ab73c32e2806f8c5a7c9fe340aecf285b3
+Filename: pool/main/SANsymphony-plugin_1.0.2_amd64.deb
+Size: 19992
+MD5sum: b6b4afe86384cf4622aefce0178435e1
+SHA1: ca26561f35f7f4fe9ec555ba924593ceeba3056a
+SHA256: 66ca0466342a8112399afae2999ac46c81c226c6e0cd3a30e3790a1d33a05ff3
 Section: utils
 Priority: optional
 Description: A proxmox storage plugin for DataCore SANsymphony.

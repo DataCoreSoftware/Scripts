@@ -28,17 +28,20 @@ References
 
 The plugin enables shared iSCSI storage managed by DataCore SANsymphony to be used directly from Proxmox VE. You can manage storage via the Proxmox UI/CLI or using the built-in `ssy-plugin` command-line interface.
 
-Key capabilities include:
-- Configure [Udev Rules](https://docs.datacore.com/SSV-WebHelp/SSV-WebHelp/FAQ/Host-Configuration-Guide/Proxmox_Configuration_Guide.htm#SCSI), [iSCSI Settings](https://docs.datacore.com/SSV-WebHelp/SSV-WebHelp/FAQ/Host-Configuration-Guide/Proxmox_Configuration_Guide.htm?Highlight=Proxmox#iSCSI) and [SCSI Multipath](https://docs.datacore.com/SSV-WebHelp/SSV-WebHelp/FAQ/Host-Configuration-Guide/Proxmox_Configuration_Guide.htm?Highlight=Proxmox#iSCSI2)
-- Management of multiple iSCSI sessions
-- Seamless provisioning of shared Virtual Disks (VDs)
-- Dynamic provisioning of VD through Raw Device Mapping
-- LVM support on top of SANsymphony VDs
-- Compatibility with Proxmox UI and CLI
-- An interactive wrapper CLI tool (`ssy-plugin`) for simplified management
+### Key capabilities include:
+- **Advanced Storage Configuration**: Automates the setup of [Udev Rules](https://docs.datacore.com/SSV-WebHelp/SSV-WebHelp/FAQ/Host-Configuration-Guide/Proxmox_Configuration_Guide.htm#SCSI), [iSCSI Settings](https://docs.datacore.com/SSV-WebHelp/SSV-WebHelp/FAQ/Host-Configuration-Guide/Proxmox_Configuration_Guide.htm?Highlight=Proxmox#iSCSI) and [SCSI Multipath](https://docs.datacore.com/SSV-WebHelp/SSV-WebHelp/FAQ/Host-Configuration-Guide/Proxmox_Configuration_Guide.htm?Highlight=Proxmox#iSCSI2) for optimal performance.
+- **Multi-Session iSCSI Management**: Handles multiple iSCSI sessions simultaneously for path redundancy.
+- **Seamless Shared Storage**: Enables unified provisioning across the entire Proxmox cluster.
+- **Dynamic Raw Device Mapping (RDM)**: Facilitates dynamic provisioning of Virtual Disks via RDM.
+- **LVM Integration**: Full support for LVM volumes layered on top of DataCore SANsymphony Virtual Disks.
+- `ssy-plugin` **CLI**: Includes an interactive wrapper for simplified management and troubleshooting.
+- **Cluster High Availability (HA) & Migration**: As the plugin provides true Shared Storage, it fully supports Proxmox HA environments:
+  - **Live Migration**: Seamlessly move running VMs between nodes with zero downtime.
+  - **Automatic HA Failover**: Integrated with the PVE HA stack to restart VMs on healthy nodes if a host fails.
+  - **Consistent State**: Shared LVM/iSCSI targets ensure all nodes have simultaneous, coordinated access to VM data.
 
 >[!IMPORTANT]
-> The SANsymphony Custom Storage Plugin 1.0.1 has been validated and tested with Proxmox VE versions **8** and **9.0.3**. If you upgrade or install Proxmox VE to a version higher than **9.0.3**, you may see the following warning message: "**PVE::Storage::Custom::SANsymphonyPlugin is implementing an older storage API; an upgrade is recommended**". This warning is informational and does not typically impact the functionality of the plugin.
+> The SANsymphony Custom Storage Plugin 1.0.2 has been validated and tested with Proxmox VE versions **8** and **9.1.1**. If you upgrade or install Proxmox VE to a version higher than **9.1.1**, you may see the following warning message: "**PVE::Storage::Custom::SANsymphonyPlugin is implementing an older storage API; an upgrade is recommended**". This warning is informational and does not typically impact the functionality of the plugin.
 
 <br/>
 
@@ -86,12 +89,12 @@ apt install ssy-plugin
 
 ### 1. Download the package
 ```bash
-wget https://github.com/DataCoreSoftware/Scripts/releases/download/SSY_PVE_Plugin/SANsymphony-plugin_1.0.1_amd64.deb
+wget https://github.com/DataCoreSoftware/Scripts/releases/download/SSY_PVE_Plugin/SANsymphony-plugin_1.0.2_amd64.deb
 ```
 
 ### 2. Install it
 ```bash
-dpkg -i SANsymphony-plugin_1.0.1_amd64.deb
+dpkg -i SANsymphony-plugin_1.0.2_amd64.deb
 ```
 
 ## 🛠️ Proxmox Configuration Updates Performed After Plugin Installation
@@ -120,7 +123,7 @@ On Proxmox VE nodes, the iSCSI service does not start automatically by default a
   These changes are applied automatically by the plugin immediately after installation and do not require manual configuration. 
 - A backup of the original `iscsid.conf` file is stored at the following location:
   ```
-  /tmp/iscsid.conf
+  /var/backups/SANsymphony-Plugin-Backup/iscsid.conf
   ```
 For more information, refer to the [iSCSI Settings](https://docs.datacore.com/SSV-WebHelp/SSV-WebHelp/FAQ/Host-Configuration-Guide/Proxmox_Configuration_Guide.htm#iSCSI) section in the Proxmox Configuration Guide. 
 
@@ -132,6 +135,11 @@ As part of the installation, the plugin creates or updates the multipath configu
 ```
 /etc/multipath.conf
 ```
+
+If the `multipath.conf` file exists, a backup is created at the following location:
+  ```
+  /var/backups/SANsymphony-Plugin-Backup/multipath.conf
+  ```
 
 The configuration applied includes DataCore-recommended defaults and device-specific settings equivalent to the following:
 ```
@@ -186,6 +194,19 @@ The udev rules are reloaded automatically by the SANsymphony Custom Storage Plug
 udevadm control --reload-rules
 udevadm trigger --subsystem-match=block
 ```
+
+### Post-Installation Proxmox Service Management
+
+To ensure that the plugin configurations are correctly loaded and integrated into the Proxmox Virtual Environment (PVE), the following core services are signaled to reload or restart during the postinst phase. This process ensures zero or minimal downtime by attempting a reload before resorting to a restart.
+
+- `pvedaemon.service` – Proxmox VE API daemon
+- `pveproxy.service` – Proxmox VE web interface proxy
+- `pvestatd.service` – Proxmox VE status update daemon
+- `pvescheduler.service` – Proxmox VE task scheduler
+- `pve-ha-lrm.service` – Proxmox VE HA local resource manager
+
+>[!NOTE]
+>The restart commands are safe and include fallbacks to avoid blocking the installation if a service is not running.
 
 <br/>
 
