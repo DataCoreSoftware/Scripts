@@ -5,40 +5,40 @@ Origin: DataCore SANsymphony Repository
 Label: ssy-plugin
 Suite: stable
 Codename: stable
-Version: 1.0.1
+Version: 1.0.2
 Architectures: amd64
 Components: main
 Description: A proxmox storage plugin for DataCore SANsymphony software-defined storage
-Date: Thu, 06 Nov 2025 06:04:13 +0000
+Date: Fri, 30 Jan 2026 12:32:36 +0000
 MD5Sum:
- 3c33b27ecb6026c9ad3144affbcd3cad 2060 InRelease
- db471d5cce08d349109460fa176b8f24 390 main/binary-amd64/Packages.gz
- a111374d39921cb5cca3cdba533bd6f7 512 main/binary-amd64/Packages
- d5ace9a954e05d9562fb09aaf8bb9dfe 870 Release.gpg
+ 56b173524e4d053809ad38eb3aec74f5 2065 InRelease
+ 85f83c3731de2e5d30a46517ee22bc32 387 main/binary-amd64/Packages.gz
+ 5ab4a95dc0eedc359faa3916c865a3b1 512 main/binary-amd64/Packages
+ 7f7c132b3f37b3da50da151a8ea98bac 870 Release.gpg
 SHA1:
- edc682dca255ff43c6fcfe7e7bdfd995a69b1b61 2060 InRelease
- f75d2bbbb270d85f4fc6570dd0c53d45139850be 390 main/binary-amd64/Packages.gz
- 1d454b933f9cab48743aca651534dfa312957e70 512 main/binary-amd64/Packages
- 1c6a1f17d2a717bdfced3942546c8341352f2ecc 870 Release.gpg
+ f4f8999570cd4d504c0f9fc23c05fef885fb5c35 2065 InRelease
+ 6a9c635bb61d3ad0baebf64ca0d5bed58dfff51f 387 main/binary-amd64/Packages.gz
+ 5a7e1a0fe3b50a8472ccf59e8f05c962145a7496 512 main/binary-amd64/Packages
+ 88c392d16da96ceddd7a97416b1836003213aefc 870 Release.gpg
 SHA256:
- 00e5fabc818d5032f0dbb018908ceb3829c968a78835f773b806dbffc183ff90 2060 InRelease
- 7630d538285248f568341cb5a5f7abe29e96ed809f061dc704bc7088bea10564 390 main/binary-amd64/Packages.gz
- 4026e7fc94b3b896a3de40b0ad502ccb7088185d8de18b7deaa74a47f360ba8a 512 main/binary-amd64/Packages
- 535967498d75f30efeaf85e1be98e0edfbb58608f7aaa722c154c75bfc2b9c34 870 Release.gpg
+ 560456e198b156c44b21ead42d058f34f15a541e9a7667a7afc6a5a9ad24650c 2065 InRelease
+ d20714a00bb4de0dcca764ae82cc94aa382f300290a25e35bc4c30fcd1277853 387 main/binary-amd64/Packages.gz
+ 46224189b0ae4bdf8933c463f9133317298ec14dfddf29acc1d0c442d876acad 512 main/binary-amd64/Packages
+ b7fdcb832562b89ce36c2f31d5c57562d487df3d80e6fcd9d3091638a483a1dc 870 Release.gpg
 -----BEGIN PGP SIGNATURE-----
 
-iQJNBAEBCgA3FiEE58i+uMXlyKG0maMH9Y4XjmYSLZ0FAmkMO4QZHGNoaXJhbnRo
-LmpzQGRhdGFjb3JlLmNvbQAKCRD1jheOZhItnWxQEAC9l+phPcKzdmt9Vwc0fVlP
-914gYqj8BWdTMKZEj2wSsmjPHHiIoHrhU7ZhfHEmwp9y6dkrIbqXk34I18HE5cwR
-67y8wwkhw3hoEgHBaHzmWImc0Nd4iHzwmGNE9TCmiVoznus70xpFvgOhkWDhPIaz
-j/BVczQJX5zvp0EsApKCzvBK9aMU4veG9oi2s0lBWVEVoz1rUr5GuC6CjKRlAoVX
-ZOxGRk5Phfo285vxIkwyrWUk3ErqaG4QTlgtdEdyoLHiOmwhz75kqP/lBxwrvnxR
-P/mzlAtJiLBLW4kbkm7PtdGHAfl26OE6Y/0b3qBnZzBm2wWh35cZ1nQnB4Pxvoah
-CVIB/PkcDFs0CbbqyTMHLeeNuwo68W1IiVvJJZQBKMxPxauqI1VICVy5Bxts0jM9
-0/uJmV9QWru2yUpCO1O8eVY4C/WEBtM/I/Lrl8KB6j9CEOfbgJET8M2qiIwUL0S+
-clmAfA2aBeZPELwIdUVFu0Yd10QOP1+GNIGCC8JYRdfr489llzHp1NLtKlHQpeo+
-2czBeWYRQm87Yv9zzKPtPJk5YYOb1fT7HoxBqbuu10E9X3N2JMbwn61hfwLbC8L9
-mZPu2fFIWiKJ97OdP77kpzla/LiDkBTph3f369zgj3X9Wffvn8OpRXg7twFuf9a9
-9H+VInJYbvI4HM5hA9Oj1w==
-=Bf7y
+iQJNBAEBCgA3FiEE58i+uMXlyKG0maMH9Y4XjmYSLZ0FAml8pSoZHGNoaXJhbnRo
+LmpzQGRhdGFjb3JlLmNvbQAKCRD1jheOZhItnVGPEACNeNZ6cUjE8xZ+Hh1Tx/4g
+Nlccw+0AMrTSMnZoY8wKsjWviJrlYyCZcJ6Q2upEhpExOIwrb7gwSOnVk5eX5ynr
+F5MIHP6pB/CEOd+mUqA1Z+NeOeBmePbEilJ1rfmpPqaz0HyM2mMISucNRHurnAzI
+SxoZdEFGzC8C/iDcjLr4C2kCZZ8peg/vTYHs3d5qvZ2k6SgPZngk4V4FrtUyrm87
+hUJJbxZ4GYvVpb6ROCth0fU3ZZO0Ba38IAT3cWHjrJKB2w+4nPY8vGypgSwJtXxH
+sYLffvf0ykfRiao6FqR8uu/vPAtdoQYgAWt0viEdNzxeEH1+xcabPDGez4vcpFFi
+HokWT95tqt9VrST93kBFcpBWotMj++5ejWN8ZZ4HBPh54I3AfBAcCVuTqDfSi8rv
+8xP9z+NQRtWuVlOnaSvGpQPBeWnyJbVaZFd+7EzJf+TEkVo3AyXd/M86GTqD/ki7
+CPoDeWU5eXK4U88t0sErbLsdPruC/hGFJCP2DtjGIOv9kqBEPlop2/KBl0Cop6X4
+WDlFRfw7Y9FGZA2aV8DFdYzq3WS+IQCqUuahb9sXanYaUWrczoKuafTcubRX9hUu
+kuyn3grtwhHC3BjDfte0L4y5GSelc5Sfv+tKOfcjAuVIhH1A6wswOaeR0NvbFGbS
+m3tv75sXF54tpffeboyATw==
+=5IdX
 -----END PGP SIGNATURE-----
