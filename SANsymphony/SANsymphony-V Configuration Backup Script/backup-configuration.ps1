@@ -19,10 +19,12 @@
 # SANsymphony-V Configuration Backup Script
 #
 ### THIS INFORMATION IS GATHERED BY A FUNCTION. ONLY MODIFY VALUE BEHIND ":" !!!
-# Script-Version:     1.0.21
-# Script-Date:        2016-12-13
+# Script-Version:     1.0.22
+# Script-Date:        2025-02-20
 ##################################################################################################################################
 # Changelog
+#
+# Version 1.0.22 - Refactored script to organize methods by responsibility.
 #
 # Version 1.0.21 - Adjusted script to honor "windowstyle hidden" option on restart.
 #
@@ -32,7 +34,7 @@
 #
 # Version 1.0.18 - Corrected determining short name of hostname / FQDN which was $null due to a pipeline issue
 #
-# Version 1.0.17 - Adjusted script to honor domain joined systems (hostname is FQDN, that´s why the name needs to be split off)
+# Version 1.0.17 - Adjusted script to honor domain joined systems (hostname is FQDN, that's why the name needs to be split off)
 #
 # Version 1.0.16 - Upgraded functions.
 #
@@ -101,7 +103,7 @@
             For instance: "C:\SSY-V-Backup" will expect an UNC share on every SSY-V server with "SSY-V-Backup$"
 
         2. backup-configuration.ps1 -overWriteLogFile $true
-            Will issue the script but won´t provide a time-stamp in front of the logfile-name. Therefore with the next run this logfile will
+            Will issue the script but won't provide a time-stamp in front of the logfile-name. Therefore with the next run this logfile will
             be overwritten.
 
         3. backup-configuration.ps1 -installScript $true 
@@ -125,8 +127,9 @@
             Script will run and keep backups on remote backup share 300 days (instead of 30 which is default). After that the backups will be deleted.
             
 #>
-###################################################################################################################################
-###### PARAMETERS
+
+#region ======================== PARAMETERS ==========================
+
 [CmdletBinding(DefaultParameterSetName="Default")]
 Param(
     [Parameter(ParameterSetName="Default", Mandatory = $false, HelpMessage="Should the logfile be overwritten?")]
@@ -177,8 +180,12 @@ Param(
 	[boolean]
 	$showVerboseLogging = $false
 )
-###################################################################################################################################
-###### Configuring the Script window
+
+#endregion
+
+#region =================== Configuring Powershell ===================
+
+### Configuring the Script window
 $windowTitle="DataCore SANsymphony-V Backup-Configuration"
 $pshost = get-host
 if ($($pshost.Name) -notmatch "ISE Host" -and [Environment]::UserInteractive)
@@ -206,11 +213,791 @@ if ([Environment]::UserInteractive)
 [void] [System.Reflection.Assembly]::LoadWithPartialName("System.Windows.Forms")
 [void] [System.Reflection.Assembly]::LoadWithPartialName("System.Drawing") 
 [void] [System.Reflection.Assembly]::LoadWithPartialName('Microsoft.VisualBasic')
-###################################################################################################################################
-###### FUNCTIONS
+#endregion
 
-###################################################################################################################################
-##### FUNCTIONS STARTING WITH >A<
+#region ========================= Helpers ============================
+
+function get-scriptName()
+{
+    # gets the parent path of the script. Is used to determine where to write logs etc.
+    $myAbsoluteScriptPath = $null
+    $myAbsoluteScriptPath = $($MyInvocation.PSCommandPath) -split "\\"
+    $globalMyScriptName = $myAbsoluteScriptPath[($myAbsoluteScriptPath.count-1)] -replace ".ps1"
+    if ( $globalMyScriptName )
+    {
+        return "$globalMyScriptName"
+    }
+    else
+    {
+        return $false
+    }
+}
+#----------------------------------------------------------------------------------------------------------------------------------
+function get-NiceTimeStamp()
+{
+    # function to get a nice timestamp with the following format
+    $date = Get-Date -Format yyyy-MM-dd__HH-mm-ss
+    return $date
+}
+#----------------------------------------------------------------------------------------------------------------------------------
+function get-osLanguage()
+{
+    $privMessagePrefix = "$($MyInvocation.InvocationName) :"
+    multi-PurposeLogging -message "$privMessagePrefix Function invoked without parameters." -level "verbose"
+    
+    # Getting the OS Language from WMI
+    $languageCode = $null
+    $languageCode = ($Win32_OS = Get-WmiObject Win32_OperatingSystem).oslanguage
+    $languageInstalled = $null
+    if ($languageCode -eq "1031")
+    {
+        $languageInstalled = "german"
+        multi-PurposeLogging -message "$privMessagePrefix returns >$languageInstalled<." -level "success"
+        return $languageInstalled
+    }
+    elseif ($languageCode -eq "1033")
+    {
+        $languageInstalled = "english"
+        multi-PurposeLogging -message "$privMessagePrefix returns >$languageInstalled<." -level "success"
+        return $languageInstalled
+    }
+    else
+    {
+        multi-PurposeLogging -message "$privMessagePrefix returns >false<." -level "error"
+        return $false
+    }
+}
+#----------------------------------------------------------------------------------------------------------------------------------
+function get-PowershellVersion()
+{
+    # Version 1.1
+    $privMessagePrefix = "$($MyInvocation.InvocationName) :"
+    multi-PurposeLogging -message "$privMessagePrefix Function invoked without parameters." -level "verbose"
+
+    $ErrorOccured = $false 
+    $psVersion = $null
+    
+    ### The Doing
+    if ( $ErrorOccured -eq $false )
+    {
+        # Tryining to get the PSversion from an PS Object
+        $psversionObject = $null
+        $psversionObject = $PSVersionTable.PSVersion
+        $majorVersion = $null
+        $majorVersion = $psversionObject.Major
+        $minorVersion = $null
+        $minorVersion = $psversionObject.Minor
+        $psVersion = [float]$("$majorVersion" + "." + "$minorVersion")
+        
+        # if we do not get any Information then its either PS Version 1.0 because this table was introduced in 2.0 or Powershell is not available at all
+        if ( $psVersion -eq $null )
+        {
+            ## We are checking against the registry if PS is available at all
+            # moving to the HKLM drive
+            Set-Location HKLM:
+            $registryValue = $null
+            $registryValue = Get-ItemProperty HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\PowerShell\1\PowerShellEngine -ErrorAction SilentlyContinue
+            if ( $registryValue -ne $null )
+            {
+                $psVersion = [float]$($registryValue.PowerShellVersion)
+            }
+            else
+            {
+                multi-PurposeLogging -message "$privMessagePrefix could not determine Powershell version." -level "error"
+                $ErrorOccured = $false
+            }
+        }
+    }
+
+    ### Return value of the function
+    if ( $ErrorOccured -eq $true )
+    {
+        multi-PurposeLogging -message "$privMessagePrefix returns >false<." -level "error"
+        return $false
+    }
+    else
+    {
+        multi-PurposeLogging -message "$privMessagePrefix psversion is >$psVersion<." -level "verbose"
+        return [float]$psVersion
+    }
+}
+#----------------------------------------------------------------------------------------------------------------------------------
+function get-scriptabsolutefolderpath()
+{
+    # Version 1.1
+
+    # gets the parent path of the script. Is used to determine where to write logs etc.
+    $ErrorOccured = $false
+
+    ### THE DOING
+    $myAbsoluteScriptPath = $null
+    $myAbsoluteScriptPath = $($MyInvocation.PSCommandPath) -split "\\"
+    $myAbsoluteScriptPath = $myAbsoluteScriptPath[0..($myAbsoluteScriptPath.count-2)] -join '\'
+    $myAbsoluteScriptPath += "\"
+    if ( $myAbsoluteScriptPath )
+    {
+        # if we have a string not like C:\ or any other drive mapping 
+        if ( $myAbsoluteScriptPath -notlike "*:\*")
+        {
+            $ErrorOccured = $true
+        }
+        else
+        {
+            # Adding a Backslash if necessary
+            $pathStringLength = $($myAbsoluteScriptPath.Length)
+            if ( $( "$myAbsoluteScriptPath".Substring($pathStringLength-1) ) -ne "\" )
+            {
+                $myAbsoluteScriptPath = "$myAbsoluteScriptPath" + "\"
+            }
+        }
+    }
+    else
+    {
+        $ErrorOccured = $true
+    }
+    
+    ### Return value of the function
+    if ( $ErrorOccured -eq $true )
+    {
+        return $false
+    }
+    else
+    {
+        return "$myAbsoluteScriptPath"
+    }
+}
+#----------------------------------------------------------------------------------------------------------------------------------
+function get-scriptDate($path)
+{
+    $privPath = "$path"
+    $privMessagePrefix = "$($MyInvocation.InvocationName) :"
+    multi-PurposeLogging -message "$privMessagePrefix Function invoked with parameter path >$path<." -level "verbose"
+
+    $privScriptDate = $null
+    $privScriptDate = get-content "$privPath" | select-string -pattern "^# Script-Date:"
+    $privScriptDate = ($privScriptDate -replace "# Script-Date:","").trim()
+
+    if ($privScriptDate)
+    {
+        multi-PurposeLogging -message "$privMessagePrefix Function returns >$privScriptDate<." -level "success"
+        return $privScriptDate
+    }
+    else
+    {
+        multi-PurposeLogging -message "$privMessagePrefix could not find ># Script-Date:<. Function returns >false<." -level "warning"
+        return $false
+    }
+}
+#----------------------------------------------------------------------------------------------------------------------------------
+function get-scriptParametersAsString($absolutePathToScript,$includeIgnoreParameters)
+{
+    # Version 1.1
+
+    # gets the parameters in a re-usable format for powershell.exe
+    # non-logging function - we fly blind...
+    $privAbsolutePathToScript = [string]$absolutePathToScript
+    $privIncludeIgnoreParameters = [boolean]$includeIgnoreParameters
+
+    $ErrorOccured = $false
+
+    ### Parameter Check
+    if ( "$privAbsolutePathToScript" -eq "")
+    {
+        $ErrorOccured = $true
+    }
+    else
+    {
+        if ( -not ( test-path -path "$privAbsolutePathToScript" ) )
+        {
+            $ErrorOccured = $true
+        }
+    }
+
+    ### THE DOING
+    if ( $ErrorOccured -eq $false )
+    {
+        $parametersAsString = ""
+        
+        $parameters = $null
+        $parameters = $( get-command "$privAbsolutePathToScript" ).Parameters
+        $parameterKeys = $null
+        $parameterKeys = $parameters.Keys
+
+        foreach ( $parameterKey in $parameterKeys )
+        {
+            try
+            {
+                $parameter = $null
+                $parameter = Get-Variable $parameterKey -ErrorAction Stop
+                $parameterName = $null
+                $parameterName = [string]$($parameter.Name)
+                
+                # Standard-Operation is to exclude "ignore-" parameters. But override also processes them.
+                if ( -not ( "$parameterName" -ilike "ignore*" ) -or $privIncludeIgnoreParameters -eq $true )
+                {
+                    $parameterValue = $null
+                    $parameterValue = $($parameter.value)
+                    if ( "$parameterValue" -ieq "false" )
+                    {
+                        $parameterValue = 0
+                    }
+                    elseif ( "$parameterValue" -ieq "true" )
+                    {
+                        $parameterValue = 1
+                    }
+                    else
+                    {
+                        $parameterValue = "'$parameterValue'"
+                    }
+
+                    $parametersAsString+="-$parameterName "
+                    $parametersAsString+="$parameterValue "
+                }
+            }
+            catch
+            {
+                # Do nothing
+            }
+        }
+    }
+
+    ### Return value of the function
+    if ( $ErrorOccured -eq $true )
+    {
+        return $false
+    }
+    else
+    {
+        return "$parametersAsString"
+    }
+}
+#----------------------------------------------------------------------------------------------------------------------------------
+function get-scriptVersion($path)
+{
+    # Version 1.1
+    $privPath = "$path"
+    $privMessagePrefix = "$($MyInvocation.InvocationName) :"
+    multi-PurposeLogging -message "$privMessagePrefix Function invoked with parameter path >$path<." -level "verbose"
+
+    $privScriptVersion = $null
+    $privScriptVersion = get-content "$privPath" | Select-String -pattern "^# Script-Version:"
+    $privScriptVersion = ($privScriptVersion -replace "# Script-Version:","").trim()
+
+    if ($privScriptVersion)
+    {
+        multi-PurposeLogging -message "$privMessagePrefix Function returns >$privScriptVersion<." -level "success"
+        return $privScriptVersion
+    }
+    else
+    {
+        multi-PurposeLogging -message "$privMessagePrefix could not find ># Script-Version:<. Function returns >false<." -level "warning"
+        return $false
+    }
+}
+#----------------------------------------------------------------------------------------------------------------------------------
+function zip-foldercontent($absolutePathToSourceFolder, $zipFileName)
+{
+    # Version 1.1
+    $privAbsolutePathToSourceFolder = "$absolutePathToSourceFolder"
+    $privZipFileName = "$zipFileName"
+
+    $privMessagePrefix = "$($MyInvocation.InvocationName) :"
+    multi-PurposeLogging -message "$privMessagePrefix Function invoked. Parameter privZipFileName has value >$privZipFileName< and privAbsolutePathToSourceFolder >$privAbsolutePathToSourceFolder<." -level "verbose"
+    
+    $errorOccured=$false
+
+    ### checking if the sourcefolder is there.
+    if ($privAbsolutePathToSourceFolder -eq "")
+    {
+        multi-PurposeLogging -message "$privMessagePrefix error. Parameter privAbsolutePathToSourceFolder is empty string." -level "error"
+        $errorOccured = $true
+    }
+    else
+    {
+        ### Checking if the folder is existent
+        if ( ! (get-item -Path "$privAbsolutePathToSourceFolder" -ErrorAction SilentlyContinue) )
+        {
+            multi-PurposeLogging -message "$privMessagePrefix could not find folder >$privAbsolutePathToSourceFolder<." -level "error"
+            $errorOccured = $true
+        }
+        else
+        {
+            ### Checking if there is content in the folder
+            if ( $(Get-ChildItem -Path "$privAbsolutePathToSourceFolder") -eq $null)
+            {
+                multi-PurposeLogging -message "$privMessagePrefix no child items (files / folders) in >$privAbsolutePathToSourceFolder<." -level "warning"
+            }
+        }
+    }
+    ### Checking if we have a filename provided
+    if ( $privZipFileName -eq "")
+    {
+        multi-PurposeLogging -message "$privMessagePrefix no zip filename provided. Using folder name instead." -level "warning"
+        $privZipFileName = "$((get-item -Path "$privAbsolutePathToSourceFolder" -ErrorAction SilentlyContinue).BaseName)"".zip"
+    }
+    elseif ( ! ($privZipFileName.Substring($privZipFileName.Length -4, 4) -ieq ".zip" ) )
+    {
+        multi-PurposeLogging -message "$privMessagePrefix no zip extension provided. Adding >.zip< to file name." -level "warning"
+        $privZipFileName="$privZipFileName.zip"
+    }
+
+    ### The Doing
+    if ($errorOccured -eq $false)
+    {
+        $parentDirectory = $null
+        $parentDirectory = "$((Get-Item -Path "$privAbsolutePathToSourceFolder").parent.FullName)\"
+
+        $absolutePathToZipFile=$null
+        $absolutePathToZipFile="$parentDirectory$privZipFileName"
+
+        ### Checking if the destination file is already there.
+        if (Get-Item -Path "$absolutePathToZipFile" -ErrorAction SilentlyContinue)
+        {
+            multi-PurposeLogging -message "$privMessagePrefix zip file >$absolutePathToZipFile< already existent." -level "warning"
+            $basename=(Get-Item -Path "$absolutePathToZipFile" -ErrorAction SilentlyContinue).BaseName
+            $newname="$basename"+"__$(get-NiceTimeStamp).zip"
+            multi-PurposeLogging -message "$privMessagePrefix renaming file to >$newname<." -level "information"
+            
+            $result=rename-Item -Path "$absolutePathToZipFile" "$newname" -Force -Confirm:$false
+            if ( $? -eq $true )
+            {
+                multi-PurposeLogging -message "$privMessagePrefix success." -level "success"
+            }
+            else
+            {
+                multi-PurposeLogging -message "$privMessagePrefix failed." -level "error"
+                $errorOccured = $true
+            }
+        }
+
+        ### Zipping the folder content
+        multi-PurposeLogging -message "$privMessagePrefix zipping folder content of >$privAbsolutePathToSourceFolder< to >$absolutePathToZipFile<." -level "information"
+        Add-Type -Assembly System.IO.Compression.FileSystem
+        ### The error is only caught through a try-catch
+        try
+        {
+            $compressionLevel = [System.IO.Compression.CompressionLevel]::Optimal
+            [System.IO.Compression.ZipFile]::CreateFromDirectory($privAbsolutePathToSourceFolder, $absolutePathToZipFile, $compressionLevel, $false)
+
+            if (Get-Item -Path "$absolutePathToZipFile" -ErrorAction SilentlyContinue)
+            {
+                multi-PurposeLogging -message "$privMessagePrefix success." -level "success"
+            }
+            else
+            {
+                multi-PurposeLogging -message "$privMessagePrefix failed." -level "error"
+                $errorOccured = $true
+            }
+        }
+        catch
+        {
+            multi-PurposeLogging -message "$privMessagePrefix failed." -level "error"
+            $errorOccured = $true            
+        }
+    }
+
+    ### Return value of the function
+    if ($errorOccured -eq $false)
+    {
+        multi-PurposeLogging -message "$privMessagePrefix returns the path to the zip-file >$absolutePathToZipFile<." -level "success"
+        return $absolutePathToZipFile
+    }
+    else
+    {
+        multi-PurposeLogging -message "$privMessagePrefix returns >false<." -level "error"
+        return $false
+    }
+}
+#----------------------------------------------------------------------------------------------------------------------------------
+function cleanup-Folder($absolutePathToFolder, $TTLinDays, $examineAllFiles)
+{
+    # Version 1.3
+
+    $privAbsolutePathToFolder = [string]$absolutePathToFolder
+    $privExamineAllFiles = [boolean]$examineAllFiles
+    $privTTLinDays = [int]$TTLinDays
+    $privMessagePrefix = "$($MyInvocation.InvocationName) :"
+    multi-PurposeLogging -message "$privMessagePrefix Function invoked. Parameter privAbsolutePathToFolder has value >$privAbsolutePathToFolder<, >privTTLinDays< has value >$privTTLinDays<, privExamineAllFiles is >$privExamineAllFiles<." -level "verbose"
+    
+    $errorOccured = $false
+
+    if ( $privTTLinDays -eq "" -or $privTTLinDays -eq $null)
+    {
+        multi-PurposeLogging -message "$privMessagePrefix privTTLInDays is null or empty. Will use default-value of 100." -level "warning"
+        $privTTLinDays = 100
+    }
+    
+    ##### Checking the path value
+    ### Must not be emtpy because this will clean up the folder the script currently has its focus in.
+    if ( "$privAbsolutePathToFolder" -eq "" -or $privAbsolutePathToFolder -eq $null)
+    {
+        multi-PurposeLogging -message "$privMessagePrefix privAbsolutePathToFolder is null or empty. Aborting due to safety reasons." -level "error"
+        $errorOccured = $true        
+    }
+    ## Finding Paths that contain only a UNC + Drive Character or a Drive character + \ like \\myunc\c$ or \\myunc\c$\ or \\myunc\c or \\myunc\c\
+    if ( "$privAbsolutePathToFolder" -match "^\\\\[a-z,A-Z,0-9,-,.]+\\[a-z]{1}?\$`$" -or "$privAbsolutePathToFolder" -match "^\\\\[a-z,A-Z,0-9,-,.]+\\[a-z]{1}?\$\\`$" -or "$privAbsolutePathToFolder" -match "^\\\\[a-z,A-Z,0-9,-,.]+\\[a-z]{1}?`$" -or "$privAbsolutePathToFolder" -match "^\\\\[a-z,A-Z,0-9,-,.]+\\[a-z]{1}?\\`$")
+    {
+        multi-PurposeLogging -message "$privMessagePrefix detected a path that seems to be a root of a drive. This can cause unexpected deletion results! Aborting ..." -level "error"
+        $errorOccured = $true
+    }
+    ## Finding Paths that contain only a Drive Character or a Drive Character + \ like c: or c:\
+    if ( "$privAbsolutePathToFolder" -match "^[a-z]{1}?:\\`$" -or "$privAbsolutePathToFolder" -match "^[a-z]{1}?:`$")
+    {
+        multi-PurposeLogging -message "$privMessagePrefix detected a path that seems to be a root of a drive. This can cause unexpected deletion results! Aborting ..." -level "error"
+        $errorOccured = $true
+    }
+    ### Protecting various system relevant folders
+    if ( "$privAbsolutePathToFolder" -match "^[a-z]{1}?:\\Program" -or "$privAbsolutePathToFolder" -match "^[a-z]{1}?:\\Windows\\")
+    {
+        multi-PurposeLogging -message "$privMessagePrefix detected a path that seems to be a root of a drive. This can cause unexpected deletion results! Aborting ..." -level "error"
+        $errorOccured = $true
+    }
+
+    ### THE DOING ONLY IF THE PATHS ARE OK
+    if ( $errorOccured -eq $false )
+    {
+        ## getting the date of today and the date upon which should be deleted
+        $privToday = $null
+        $privToday = get-date
+        $privTTLDate = $null
+        $privTTLDate = $privToday.AddDays(-$privTTLinDays)
+        multi-PurposeLogging -message "$privMessagePrefix calculated expiration date and time is >$privTTLDate<." -level "information"
+        ## now we get all items that are older
+        $privExpiredFolderContent = $null
+        $privExpiredFolderContent = Get-ChildItem -Path "$privAbsolutePathToFolder" -recurse -ErrorAction SilentlyContinue | where {$_.LastWriteTime -lt $privTTLDate}
+        $privErrorOccured = $false
+        if ( $privExpiredFolderContent )
+        {
+            multi-PurposeLogging -message "$privMessagePrefix the following files will be deleted: >$($privExpiredFolderContent.Name)<." -level "information"
+            ## Going through the list
+            foreach ( $privContentItem in $privExpiredFolderContent )
+            {
+                $proceedWithDeletion = $false
+                # Only if the file is existent...
+                if ( Get-Item -Path "$( $privContentItem.FullName )" -ErrorAction SilentlyContinue)
+                {
+                    ## check if we should clean up all 
+                    if ( $privExamineAllFiles -eq $true )
+                    {
+                        $proceedWithDeletion = $true
+                    }
+                    else
+                    {
+                        if ( "$($privContentItem.Extension)" -ieq ".log" )
+                        {
+                            $proceedWithDeletion = $true
+                        }
+                        else
+                        {
+                            $proceedWithDeletion = $false
+                        }
+                    }
+
+                    if ( $proceedWithDeletion -eq $true )
+                    {
+                        $privResult = $null
+                        $privResult = Remove-Item -Path "$($privContentItem.FullName)" -Recurse -Force -Confirm:$false -ErrorAction SilentlyContinue
+                        if ( -not $? )
+                        {
+                            multi-PurposeLogging -message "$privMessagePrefix could not delete file >$($privContentItem.FullName)<." -level "warning"
+                            $errorOccured = $true
+                        }
+                    }
+                }
+                ### Otherwise it might have been deleted by the folder above ;)
+            }
+        }
+        else
+        {
+            multi-PurposeLogging -message "$privMessagePrefix there are no files older than >$privTTLinDays< days." -level "verbose"
+        }
+    }
+
+    ### Return value of the function
+    if ( $errorOccured -eq $false )
+    {
+        multi-PurposeLogging -message "$privMessagePrefix returns >true<." -level "success"
+        return $true
+    }
+    else
+    {
+        multi-PurposeLogging -message "$privMessagePrefix returns >false<." -level "error"
+        return $false
+    }
+}
+#----------------------------------------------------------------------------------------------------------------------------------
+function create-Folder($absolutePath)
+{
+    # Version 1.1
+
+    ### This function is used to create a Folder with given absolute path. If the folder is already there nothing is done.
+    # The path variable must contain something.
+    if ( $absolutePath -ne "" )
+    {
+        if ( test-path -Path "$absolutePath" )
+        {
+            return $true
+        }
+        else
+        {
+            $result = $null
+            $result = New-Item -Path "$absolutePath" -ItemType directory -Force -ErrorAction SilentlyContinue -confirm:$false
+            if ( $? -eq $true )
+            {
+                return $true
+            }
+            else
+            {
+                return $false
+            }
+        }
+    }
+    else
+    {
+        return $false
+    }
+}
+#----------------------------------------------------------------------------------------------------------------------------------
+function sha512hash($absolutePath,$silent)
+{
+    # Version 1.3
+    $privAbsolutePath = "$absolutePath"
+    $privSilent = $silent
+
+    $privMessagePrefix = "$($MyInvocation.InvocationName) :"
+    if ($privSilent -ne $true)
+    {
+        $privSilent = $false
+        multi-PurposeLogging -message "$privMessagePrefix Function invoked. Parameter privAbsolutePath has value >$privAbsolutePath<, privSilent has value >$privSilent<)." -level "verbose"
+    }
+    
+    ### parameter checking
+    if ($privAbsolutePath -eq "" -or $privAbsolutePath -eq $null)
+    {
+        multi-PurposeLogging -message "$privMessagePrefix no path provided." -level "error"
+        return $false
+    }
+
+    ### checking if the file is there.
+    $fullPath = Resolve-Path $absolutePath
+    if (Test-Path -path "$fullPath" -ErrorAction SilentlyContinue)
+    {
+        ### getting the hash
+        $hashProvider = new-object -TypeName System.Security.Cryptography.SHA512CryptoServiceProvider
+        $fileToHash = [System.IO.File]::Open($fullPath,[System.IO.Filemode]::Open, [System.IO.FileAccess]::Read)
+        $hashResult=[System.BitConverter]::ToString($hashProvider.ComputeHash($fileToHash))
+        multi-PurposeLogging -message "$privMessagePrefix     file >$fullpath< has hash >$hashResult<." -level "verbose"
+        $fileToHash.Dispose()
+        if ($privSilent -ne $true)
+        {
+            multi-PurposeLogging -message "$privMessagePrefix returns the file hash." -level "success"
+        }
+        return $hashResult
+    }
+    else
+    {
+        multi-PurposeLogging -message "$privMessagePrefix there is no item in path provided." -level "error"
+        return $false        
+    }
+}
+#----------------------------------------------------------------------------------------------------------------------------------
+function sleepTimer($sleeptime,$maxCounter)
+{
+    # Version 1.1
+    $privSleepTime = [int32]$sleeptime
+    $privMaxCounter = [int32]$maxCounter
+    $counter = 1
+
+    if ($privSleepTime -eq 0)
+    {
+        $privSleepTime = 1
+    }
+    if ($privMaxCounter -eq 0)
+    {
+        $privMaxCounter = 3
+    }
+
+    while ($counter -le $privMaxCounter)
+    {
+        sleep $privSleepTime
+        if ([Environment]::UserInteractive -and $counter -eq $privMaxCounter)
+        { Write-Host "." }
+        elseif ([Environment]::UserInteractive)
+        { Write-Host -NoNewline "." }
+        $counter++
+    }
+}
+#----------------------------------------------------------------------------------------------------------------------------------
+function pause()
+{
+    # Function to wait for keystroke
+	$null = $host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+}
+
+#endregion
+
+#region ====================== Miscellaneous =========================
+
+function powerShellProfiles($action)
+{
+    # Version 1.1
+
+    $privaction = $action.toLower()
+    $privMessagePrefix = "$($MyInvocation.InvocationName) :"
+    
+    $errorOccured = $false
+
+    multi-PurposeLogging -message "$privMessagePrefix Function invoked. Parameter privAction has value >$privaction<. " -level "verbose"
+    multi-PurposeLogging -message "$privMessagePrefix Setting Powershell profiles to >$privaction<." -level "information"
+    
+    if ( $privaction -ne "enable" -and $privaction -ne "disable" )
+    {
+        $errorOccured = $true
+        multi-PurposeLogging -message "$privMessagePrefix Function invoked. Parameter privTargetValue has value >$privTargetValue<. privSilent has value >$privSilent<." -level "verbose"
+        multi-PurposeLogging -message "$privMessagePrefix Setting Quickedit registry key(s) to >$privTargetValue<." -level "information"
+    }
+
+    # Doing the configuration
+    try
+    {
+        $profileArray = @(  $($profile),
+                            $($profile.AllUsersAllHosts),
+                            $($profile.AllUsersCurrentHost),
+                            $($profile.CurrentUserAllHosts),
+                            $($profile.CurrentUserCurrentHost)
+                        )
+        
+        $profileFound = $false
+        $attachString = "_disabled"
+        $guidString = "$([System.Guid]::NewGuid().ToString())"
+        
+        foreach ( $item in $profileArray )
+        {
+            $profilePath = $item
+
+            if ( $privaction -eq "disable" )
+            {
+                if ( Test-Path -path "$profilePath" -ErrorAction SilentlyContinue )
+                {
+                    # check if there is already a file with "disabled"
+                    $profileFile = Get-Item -Path "$profilePath"
+                    $parentPath = ($profileFile).DirectoryName
+                    $filename = ($profileFile).BaseName
+                    $fileExtension = ($profileFile).Extension
+                
+                    $disabledFileName = "$filename$attachString"
+                
+                    if ( test-path -path "$parentPath\$disabledFileName$fileExtension" -ErrorAction SilentlyContinue )
+                    {
+                        multi-PurposeLogging -message "$privMessagePrefix      Found already disabled profile >$parentPath\$disabledFileName$fileExtension" -level "verbose"
+                        $newfileName=$($disabledFileName -replace "$attachString","_$guidstring")
+                        multi-PurposeLogging -message "$privMessagePrefix      renaming to >$newfileName<." -level "verbose"
+                        $result = $null
+                        $result = Move-Item "$parentPath\$disabledFileName$fileExtension" -Destination "$parentPath\$newfileName$fileExtension" -Force -Confirm:$false
+                        if ( $? -eq $false )
+                        {
+                            $errorOccured = $true
+                        }
+                    }
+                    else
+                    {
+                        $newfileName = "$filename$attachString"
+                    }
+
+                    # Renaming the current profile.
+                    multi-PurposeLogging -message "$privMessagePrefix      disabling profile >$profilePath<." -level "verbose"
+
+                    $result = $null
+                    $result = Move-Item "$parentPath\$filename$fileExtension" -Destination "$parentPath\$disabledFileName$fileExtension" -Force -Confirm:$false
+                    if ( $? -eq $false )
+                    {
+                        $errorOccured = $true
+                    }
+                    
+                    ### Store that we found at least on profile.  
+                    $profileFound = $true
+                }
+                else
+                {
+                    multi-PurposeLogging -message "$privMessagePrefix no profile found in path >$profilePath<." -level "verbose"
+                }
+            }
+            elseif ( $privaction -eq "enable" )
+            {
+                $restoreProfile = $true
+
+                ### Get the filename of the disabled file. this is a string operation.
+                $baseName = $($profilePath -split "\\")[-1] -replace ".ps1",""
+                $parentFolderArray = $($profilePath -split "\\" )
+                $parentFolder = $parentFolderArray[0..($parentFolderArray.count-2)] -join '\'
+                $parentFolder = "$parentFolder" + "\"
+                $disabledFileName = "$parentFolder$baseName$attachString.ps1"
+
+                if ( Test-Path -path "$profilePath" -ErrorAction SilentlyContinue )
+                {
+                    multi-PurposeLogging -message "$privMessagePrefix already profile found in path >$profilePath<." -level "verbose"
+                    $restoreProfile = $false
+                }
+                
+                if ( Test-Path -path "$disabledFileName" -ErrorAction SilentlyContinue )
+                {
+                    if ( $restoreProfile -eq $true )
+                    {
+                        # Renaming the current profile.
+                        multi-PurposeLogging -message "$privMessagePrefix profile found in path  >$disabledFileName<." -level "verbose"
+                        multi-PurposeLogging -message "$privMessagePrefix restoring profile >$profilePath<." -level "verbose"
+                        $result = $null
+                        $result = Move-Item "$disabledFileName" -Destination "$profilePath" -Force -Confirm:$false
+                        if ( $? -eq $false )
+                        {
+                            $errorOccured = $true
+                        }
+                    }
+                    else
+                    {
+                        multi-PurposeLogging -message "$privMessagePrefix skipping restore as a new profile has been created found in path >$profilePath<." -level "warning"
+                    }
+                }
+                else
+                {
+                    multi-PurposeLogging -message "$privMessagePrefix no disabled profile found in path >$disabledFileName<." -level "verbose"
+                }
+            }
+        }
+    }
+    catch
+    {
+        multi-PurposeLogging -message "$privMessagePrefix an error occured while >$privaction< the Powershell profiles." -level "error"
+    }
+
+    ## Returning the value of the Function.
+    if ( $ErrorOccured -eq $true )
+    {
+        multi-PurposeLogging -message "$privMessagePrefix returns >false<." -level "error"
+        return $false
+    }
+    else
+    {
+        if ( $privaction -eq "disable" )
+        {
+            if ( $profileFound -eq $true )
+            {
+                multi-PurposeLogging -message "$privMessagePrefix returns the value >profilefound<." -level "success"
+                return "profilefound"
+            }
+            elseif ( $profileFound -eq $false )
+            {
+                multi-PurposeLogging -message "$privMessagePrefix returns the value >noprofilefound<." -level "success"
+                return "noprofilefound"
+            }
+        }
+        else
+        {
+            multi-PurposeLogging -message "$privMessagePrefix returns >true<." -level "success"
+            return $true
+        }
+    }
+}
 #----------------------------------------------------------------------------------------------------------------------------------
 function autorunPs1Script($action,$scope,$scriptAbsolutePath,$scriptParameters)
 {
@@ -236,14 +1023,14 @@ function autorunPs1Script($action,$scope,$scriptAbsolutePath,$scriptParameters)
     {
         if ( "$privScriptAbsolutePath" -eq "" )
         {
-            multi-PurposeLogging -message "$privMessagePrefix parameter privScriptAbsolutePath is empty. Can´t continue." -level "error"
+            multi-PurposeLogging -message "$privMessagePrefix parameter privScriptAbsolutePath is empty. Canï¿½t continue." -level "error"
             $errorOccured = $true
         }
         else
         {
             if ( -not ( test-path -Path "$privScriptAbsolutePath" ) )
             {
-                multi-PurposeLogging -message "$privMessagePrefix could not find file in >$privScriptAbsolutePath<. Can´t continue." -level "error"
+                multi-PurposeLogging -message "$privMessagePrefix could not find file in >$privScriptAbsolutePath<. Canï¿½t continue." -level "error"
                 $errorOccured = $true
             }
         }
@@ -263,7 +1050,7 @@ function autorunPs1Script($action,$scope,$scriptAbsolutePath,$scriptParameters)
     {
         if ( -not ( "$privScope" -ieq "currentUser" ) -and  -not ( "$privScope" -ieq "localMachine" ) -and  -not ( "$privScope" -ieq "all" ) )
         {
-            multi-PurposeLogging -message "$privMessagePrefix parameter privScope has invalid value >$privScope<. Allowed are >currentUser<, >localMachine< and >all<. Can´t continue." -level "error"
+            multi-PurposeLogging -message "$privMessagePrefix parameter privScope has invalid value >$privScope<. Allowed are >currentUser<, >localMachine< and >all<. Canï¿½t continue." -level "error"
             $errorOccured = $true
         }
     }
@@ -436,7 +1223,7 @@ function autorunPs1Script($action,$scope,$scriptAbsolutePath,$scriptParameters)
                 # Checking the length
                 if ( $value.length -ge 255 )
                 {
-                    multi-PurposeLogging -message "$privMessagePrefix      value for key is longer than 255 characters. This won´t work!" -level "error"
+                    multi-PurposeLogging -message "$privMessagePrefix      value for key is longer than 255 characters. This wonï¿½t work!" -level "error"
                     $errorOccured = $true
                 }
 
@@ -477,7 +1264,7 @@ function autorunPs1Script($action,$scope,$scriptAbsolutePath,$scriptParameters)
                 # Checking the length
                 if ( $value.length -ge 255 )
                 {
-                    multi-PurposeLogging -message "$privMessagePrefix      value for key is longer than 255 characters. This won´t work!" -level "error"
+                    multi-PurposeLogging -message "$privMessagePrefix      value for key is longer than 255 characters. This wonï¿½t work!" -level "error"
                     $errorOccured = $true
                 }
 
@@ -717,130 +1504,6 @@ function autorunPs1Script($action,$scope,$scriptAbsolutePath,$scriptParameters)
         return $true
     }
 }
-
-
-###################################################################################################################################
-##### FUNCTIONS STARTING WITH >B<
-
-###################################################################################################################################
-##### FUNCTIONS STARTING WITH >C<
-#----------------------------------------------------------------------------------------------------------------------------------
-function cleanup-Folder($absolutePathToFolder, $TTLinDays, $examineAllFiles)
-{
-    # Version 1.3
-
-    $privAbsolutePathToFolder = [string]$absolutePathToFolder
-    $privExamineAllFiles = [boolean]$examineAllFiles
-    $privTTLinDays = [int]$TTLinDays
-    $privMessagePrefix = "$($MyInvocation.InvocationName) :"
-    multi-PurposeLogging -message "$privMessagePrefix Function invoked. Parameter privAbsolutePathToFolder has value >$privAbsolutePathToFolder<, >privTTLinDays< has value >$privTTLinDays<, privExamineAllFiles is >$privExamineAllFiles<." -level "verbose"
-    
-    $errorOccured = $false
-
-    if ( $privTTLinDays -eq "" -or $privTTLinDays -eq $null)
-    {
-        multi-PurposeLogging -message "$privMessagePrefix privTTLInDays is null or empty. Will use default-value of 100." -level "warning"
-        $privTTLinDays = 100
-    }
-    
-    ##### Checking the path value
-    ### Must not be emtpy because this will clean up the folder the script currently has its focus in.
-    if ( "$privAbsolutePathToFolder" -eq "" -or $privAbsolutePathToFolder -eq $null)
-    {
-        multi-PurposeLogging -message "$privMessagePrefix privAbsolutePathToFolder is null or empty. Aborting due to safety reasons." -level "error"
-        $errorOccured = $true        
-    }
-    ## Finding Paths that contain only a UNC + Drive Character or a Drive character + \ like \\myunc\c$ or \\myunc\c$\ or \\myunc\c or \\myunc\c\
-    if ( "$privAbsolutePathToFolder" -match "^\\\\[a-z,A-Z,0-9,-,.]+\\[a-z]{1}?\$`$" -or "$privAbsolutePathToFolder" -match "^\\\\[a-z,A-Z,0-9,-,.]+\\[a-z]{1}?\$\\`$" -or "$privAbsolutePathToFolder" -match "^\\\\[a-z,A-Z,0-9,-,.]+\\[a-z]{1}?`$" -or "$privAbsolutePathToFolder" -match "^\\\\[a-z,A-Z,0-9,-,.]+\\[a-z]{1}?\\`$")
-    {
-        multi-PurposeLogging -message "$privMessagePrefix detected a path that seems to be a root of a drive. This can cause unexpected deletion results! Aborting ..." -level "error"
-        $errorOccured = $true
-    }
-    ## Finding Paths that contain only a Drive Character or a Drive Character + \ like c: or c:\
-    if ( "$privAbsolutePathToFolder" -match "^[a-z]{1}?:\\`$" -or "$privAbsolutePathToFolder" -match "^[a-z]{1}?:`$")
-    {
-        multi-PurposeLogging -message "$privMessagePrefix detected a path that seems to be a root of a drive. This can cause unexpected deletion results! Aborting ..." -level "error"
-        $errorOccured = $true
-    }
-    ### Protecting various system relevant folders
-    if ( "$privAbsolutePathToFolder" -match "^[a-z]{1}?:\\Program" -or "$privAbsolutePathToFolder" -match "^[a-z]{1}?:\\Windows\\")
-    {
-        multi-PurposeLogging -message "$privMessagePrefix detected a path that seems to be a root of a drive. This can cause unexpected deletion results! Aborting ..." -level "error"
-        $errorOccured = $true
-    }
-
-    ### THE DOING ONLY IF THE PATHS ARE OK
-    if ( $errorOccured -eq $false )
-    {
-        ## getting the date of today and the date upon which should be deleted
-        $privToday = $null
-        $privToday = get-date
-        $privTTLDate = $null
-        $privTTLDate = $privToday.AddDays(-$privTTLinDays)
-        multi-PurposeLogging -message "$privMessagePrefix calculated expiration date and time is >$privTTLDate<." -level "information"
-        ## now we get all items that are older
-        $privExpiredFolderContent = $null
-        $privExpiredFolderContent = Get-ChildItem -Path "$privAbsolutePathToFolder" -recurse -ErrorAction SilentlyContinue | where {$_.LastWriteTime -lt $privTTLDate}
-        $privErrorOccured = $false
-        if ( $privExpiredFolderContent )
-        {
-            multi-PurposeLogging -message "$privMessagePrefix the following files will be deleted: >$($privExpiredFolderContent.Name)<." -level "information"
-            ## Going through the list
-            foreach ( $privContentItem in $privExpiredFolderContent )
-            {
-                $proceedWithDeletion = $false
-                # Only if the file is existent...
-                if ( Get-Item -Path "$( $privContentItem.FullName )" -ErrorAction SilentlyContinue)
-                {
-                    ## check if we should clean up all 
-                    if ( $privExamineAllFiles -eq $true )
-                    {
-                        $proceedWithDeletion = $true
-                    }
-                    else
-                    {
-                        if ( "$($privContentItem.Extension)" -ieq ".log" )
-                        {
-                            $proceedWithDeletion = $true
-                        }
-                        else
-                        {
-                            $proceedWithDeletion = $false
-                        }
-                    }
-
-                    if ( $proceedWithDeletion -eq $true )
-                    {
-                        $privResult = $null
-                        $privResult = Remove-Item -Path "$($privContentItem.FullName)" -Recurse -Force -Confirm:$false -ErrorAction SilentlyContinue
-                        if ( -not $? )
-                        {
-                            multi-PurposeLogging -message "$privMessagePrefix could not delete file >$($privContentItem.FullName)<." -level "warning"
-                            $errorOccured = $true
-                        }
-                    }
-                }
-                ### Otherwise it might have been deleted by the folder above ;)
-            }
-        }
-        else
-        {
-            multi-PurposeLogging -message "$privMessagePrefix there are no files older than >$privTTLinDays< days." -level "verbose"
-        }
-    }
-
-    ### Return value of the function
-    if ( $errorOccured -eq $false )
-    {
-        multi-PurposeLogging -message "$privMessagePrefix returns >true<." -level "success"
-        return $true
-    }
-    else
-    {
-        multi-PurposeLogging -message "$privMessagePrefix returns >false<." -level "error"
-        return $false
-    }
-}
 #----------------------------------------------------------------------------------------------------------------------------------
 function configure-QuickEditMode($targetValue,$silent)
 {
@@ -873,7 +1536,7 @@ function configure-QuickEditMode($targetValue,$silent)
         {
             $quickEditWasEnabled = $true
         }
-        Set-ItemProperty –path "$basepath" –name QuickEdit –value $privTargetValue
+        Set-ItemProperty ï¿½path "$basepath" ï¿½name QuickEdit ï¿½value $privTargetValue
 
         ### All Subkeys
         $subKeys = Get-ChildItem -Path "$basepath"
@@ -887,7 +1550,7 @@ function configure-QuickEditMode($targetValue,$silent)
                 {
                     $quickEditWasEnabled = $true
                 }
-                Set-ItemProperty –path "$basepath\$($key.pschildname)" –name QuickEdit –value $privTargetValue
+                Set-ItemProperty ï¿½path "$basepath\$($key.pschildname)" ï¿½name QuickEdit ï¿½value $privTargetValue
             }
         }
         
@@ -933,6 +1596,254 @@ function configure-QuickEditMode($targetValue,$silent)
     }
 }
 #----------------------------------------------------------------------------------------------------------------------------------
+function NtfsPermission($fileOrFolderPath, $UserOrGroup, $accessPermission, $permissionType, $inheritMode, $propagationMode, $modificationType )
+{
+    ### Examples for the usage of this function
+    <##
+    ## Hyper-V Knoten
+    $myfolder = "c:\test"
+    $mygroup = "user1"
+    $myaccessPermission = "ReadAndExecute"
+    $myInheritMode = "containerinherit,objectinherit"
+    $mypropagationmode = "none"
+    $mymodificationtype = "setrule"
+    $mypermissiontype = "allow"
+    $result = NtfsPermission -fileOrFolderPath "$myfolder" -UserOrGroup "$mygroup" -accessPermission "$myaccessPermission" -permissionType "$mypermissiontype" -inheritMode "$myInheritMode" -propagationMode "$mypropagationmode" -modificationType "$mymodificationType"
+
+    $myfolder = "c:\test"
+    $mygroup = "group1"
+    $myaccessPermission = "ReadAndExecute"
+    $myInheritMode = "none"
+    $mypropagationmode = "none"
+    $mymodificationtype = "setrule"
+    $mypermissiontype = "allow"
+    $result = NtfsPermission -fileOrFolderPath "$myfolder" -UserOrGroup "$mygroup" -accessPermission "$myaccessPermission" -permissionType "$mypermissiontype" -inheritMode "$myInheritMode" -propagationMode "$mypropagationmode" -modificationType "$mymodificationType"
+
+    $myfolder = "C:\test\subfolder-a"
+    $mygroup = "subfolder-a_re"
+    $myaccessPermission = "ReadAndExecute"
+    $myInheritMode = "none"
+    $mypropagationmode = "none"
+    $mymodificationtype = "setrule"
+    $mypermissiontype = "allow"
+    $result = NtfsPermission -fileOrFolderPath "$myfolder" -UserOrGroup "$mygroup" -accessPermission "$myaccessPermission" -permissionType "$mypermissiontype" -inheritMode "$myInheritMode" -propagationMode "$mypropagationmode" -modificationType "$mymodificationType"
+
+    $myfolder = "C:\test\anotherfolder"
+    $mygroup = "anothergroup_fullaccess"
+    $myaccessPermission = "FullControl"
+    $myInheritMode = "containerinherit,objectinherit"
+    $mypropagationmode = "inheritonly"
+    $mymodificationtype = "addrule"
+    $mypermissiontype = "allow"
+    $result = NtfsPermission -fileOrFolderPath "$myfolder" -UserOrGroup "$mygroup" -accessPermission "$myaccessPermission" -permissionType "$mypermissiontype" -inheritMode "$myInheritMode" -propagationMode "$mypropagationmode" -modificationType "$mymodificationType"
+    ##>
+
+    $privFileOrFolderPath = $fileOrFolderPath
+    $privUserOrGroup = $UserOrGroup
+    $privAccessPermission = $accessPermission
+    $privPermissionType = $permissionType
+    $privInheritMode = $inheritMode
+    $privPropagationMode = $propagationMode
+    $privModificationType = $modificationType
+    
+    $privMessagePrefix = "$($MyInvocation.InvocationName) :"
+    multi-PurposeLogging -message "$privMessagePrefix Function invoked. Parameter privFileOrFolderPath has value >$privFileOrFolderPath< privUserOrGroup >$privUserOrGroup<, privAccessPermission >$privAccessPermission<, privPermissionType >$privPermissionType<, privInheritMode is >$privInheritMode<, privPropagationMode >$privPropagationMode<, privModificationType is >$privModificationType<." -level "verbose"
+    
+    $errorOccured = $false
+    
+    ##### Parameter-Checking  
+    # Check if the parameters are there    
+    if ( ! ( $privFileOrFolderPath.length -gt 1 ) -and `
+         ! ( $privUserOrGroup.length -gt 1 ) -and `
+         ! ( $privAccessPermission.length -gt 1 ) -and  `
+         ! ( $privModificationType.length -gt 1 ) )
+    {
+        multi-PurposeLogging -message "$privMessagePrefix please provide at least >privFileOrFolderPath<, >privUserOrGroup<, >privAccessPermission< and >privModificationType<." -level "error"
+        $errorOccured = $true
+    }
+    # check the values for inherit-mode
+    if (   ! ( $($privInheritMode) -ieq "containerinherit,objectinherit" ) -and `
+           ! ( $($privInheritMode) -ieq "containerinherit" ) -and ` 
+           ! ( $($privInheritMode) -ieq "objectinherit" )  -and `
+           ! ( $($privInheritMode) -ieq "none" ) )
+    {
+        multi-PurposeLogging -message "$privMessagePrefix wrong parameter provided for >privInheritMode<. Allowed are >containerinherit<, >objectinherit<, >none< or >containerinherit,objectinherit<." -level "error"
+        $errorOccured = $true
+    }
+    # validate permission
+    if (   ! ( $($privPermissionType) -ieq "allow" ) -and `
+           ! ( $($privPermissionType) -ieq "deny" ) )
+    {
+        multi-PurposeLogging -message "$privMessagePrefix wrong parameter provided for >privPermissionType<. Allowed are >allow<, >deny<." -level "error"
+        $errorOccured = $true
+    }
+    # check modification-type
+    if (   ! ( $($privModificationType) -ieq "addrule" ) -and `
+           ! ( $($privModificationType) -ieq "setrule" ) )
+    {
+        multi-PurposeLogging -message "$privMessagePrefix wrong parameter provided for >privModificationType<. Allowed are >addrule<, >setrule<." -level "error"
+        $errorOccured = $true
+    }
+    # check Propagation    
+    if (    ! ( $($privPropagationMode) -ieq "none" ) -and `
+            ! ( $($privPropagationMode) -ieq "inheritonly" ) )
+    {
+        multi-PurposeLogging -message "$privMessagePrefix wrong parameter provided for >privPropagationMode<. Allowed are >none<, >inheritonly<." -level "error"
+        $errorOccured = $true
+    }
+    # Check the provided access-permissions which should be applied.
+    $privAccessPermissionArray = @()
+    $privAccessPermissionArray = $privAccessPermission -split ","
+    foreach ($item in $privAccessPermissionArray)
+    {
+        ## alowed permissions : ListDirectory, ReadData, WriteData, CreateFiles, CreateDirectories, AppendData, ReadExtendedAttributes, 
+        # WriteExtendedAttributes, Traverse, ExecuteFile, DeleteSubdirectoriesAndFiles, ReadAttributes, WriteAttributes, Write, Delete, 
+        # ReadPermissions, Read, ReadAndExecute, Modify, ChangePermissions, TakeOwnership, Synchronize, FullControl
+        $permission = $null
+        $item = $item.trim()
+        if ( ( $($item) -ieq "read" ) )
+        {
+            $permission = "Read"
+        }
+        elseif ( $($item) -ieq "execute" ) 
+        {
+            $permission = "Execute"
+        }
+        elseif ( $($item) -ieq "readandexecute" )
+        {
+            $permission = "ReadAndExecute"
+        }
+        elseif ( $($item) -ieq "modify" )
+        {
+            $permission = "Modify"
+        }        
+        elseif ( $($item) -ieq "fullcontrol" )
+        {
+            $permission = "FullControl"
+        } 
+        elseif ( $($item) -ieq "delete" )
+        {
+            $permission = "Delete"
+        } 
+        elseif ( $($item) -ieq "writeattributes" )
+        {
+            $permission = "WriteAttributes"
+        } 
+        elseif ( $($item) -ieq "writeextendedattributes" )
+        {
+            $permission = "WriteExtendedAttributes"
+        } 
+        else
+        {
+            multi-PurposeLogging -message "$privMessagePrefix wrong parameter provided for >privAccessPermission<. Allowed are >read<, >execute<, >readandexecute<, >modify<, >fullcontrol<, >delete<, >writeattributes<, >writeextendedattributes<." -level "warning"
+            multi-PurposeLogging -message "$privMessagePrefix skipping >$item<." -level "warning"
+            $errorOccured = $true
+        }
+
+        ## Add to the permissions list
+        $privAccessPermissionList = ""
+        $privAccessPermissionList = "$privAccessPermissionList" + "$permission"
+        $privAccessPermissionCounter = 0
+        ## Add a separator
+        if ( ( $privAccessPermissionCounter -ne 0 ) -and `
+             ( $privAccessPermissionCounter -ne $($privAccessPermissionArray.Length()) ) )
+        {
+            $privAccessPermissionList = "$privAccessPermissionList" + ","
+        }
+
+        $privAccessPermissionCounter++
+    }
+
+    ##### The Doing
+    ## Testing for the path
+    if ( ! (get-item -Path "$privFileOrFolderPath" -ErrorAction SilentlyContinue ) )
+    {
+        multi-PurposeLogging -message "$privMessagePrefix could not find >$privFileOrFolderPath<." -level "error"
+        $errorOccured = $true
+    }
+
+    ## Adding the ACL
+    if ($errorOccured -eq $false)
+    {
+        ### Grab the current ACL data
+        $currentACL = @()
+        $currentACL = Get-Acl "$privFileOrFolderPath"
+
+        ### on rule modification (set)
+        if ( $($privModificationType) -ieq "setrule")
+        {
+            multi-PurposeLogging -message "$privMessagePrefix modifying access rule for >$privFileOrFolderPath<. User/group >$privUserOrGroup< and permission >$privAccessPermissionList<." -level "information"
+
+            ### create the modified access rule
+            try
+            {
+                $modifiedAccessRule = New-Object system.security.accesscontrol.filesystemaccessrule("$privUserOrGroup","$privAccessPermissionList","$privInheritMode","$privPropagationMode","$privPermissionType")
+                $modifiedACL = $currentACL
+                $modifiedACL.SetAccessRule($modifiedAccessRule)
+                ### write the ACL
+                Set-Acl "$privFileOrFolderPath" $modifiedACL -ErrorAction SilentlyContinue
+                if ($?)
+                {
+                    multi-PurposeLogging -message "$privMessagePrefix success." -level "success"
+                }
+                else
+                {
+                    throw $($error[0])
+                }
+            }
+            catch
+            {
+                multi-PurposeLogging -message "$privMessagePrefix failed. This is the error-message >$($error[0])<." -level "error"
+                $errorOccured = $true
+            }
+        }
+        ### on rule creation
+        elseif ( $($privModificationType) -ieq "addrule" )
+        {
+            multi-PurposeLogging -message "$privMessagePrefix creating access rule for >$privFileOrFolderPath<. User/group >$privUserOrGroup< and permission >$privAccessPermissionList<." -level "information"
+
+            ### create the new access rule
+            try
+            {
+                $newAccessRule = New-Object system.security.accesscontrol.filesystemaccessrule("$privUserOrGroup","$privAccessPermissionList","$privInheritMode","$privPropagationMode","$privPermissionType")
+                $newACL = $currentACL
+                $newACL.AddAccessRule($newAccessRule)
+                ### write the ACL
+                Set-Acl "$privFileOrFolderPath" $newACL -ErrorAction SilentlyContinue
+                if ($?)
+                {
+                    multi-PurposeLogging -message "$privMessagePrefix success." -level "success"
+                }
+                else
+                {
+                    throw $($error[0])
+                }
+            }
+            catch
+            {
+                multi-PurposeLogging -message "$privMessagePrefix failed. This is the error-message >$($error[0])<." -level "error"
+                $errorOccured = $true
+            }
+        }
+    }
+
+    ### the Returning value
+    if ($errorOccured -eq $true)
+    {
+        multi-PurposeLogging -message "$privMessagePrefix returns >false<" -level "error"
+        return $false
+    }
+    else
+    {
+        multi-PurposeLogging -message "$privMessagePrefix returns >true<" -level "success"
+        return $true
+    }
+}
+
+#endregion
+
+#region ========================= Logging ============================
+
 function console-logging($message, $level, $logVerboseToSession)
 {
     # Version 1.1
@@ -981,38 +1892,303 @@ function console-logging($message, $level, $logVerboseToSession)
     }
 }
 #----------------------------------------------------------------------------------------------------------------------------------
-function create-Folder($absolutePath)
+function file-Logging($message, $logFileAbsolutePathName, $append)
 {
-    # Version 1.1
+    # Version 1.6
+    $privMessagePrefix = "$($MyInvocation.InvocationName) :"
 
-    ### This function is used to create a Folder with given absolute path. If the folder is already there nothing is done.
-    # The path variable must contain something.
-    if ( $absolutePath -ne "" )
+    $privAbsolutePathToLogFile = [string]$logFileAbsolutePathName
+    $privLoggingMessage = [string]$message   
+    $privAppend = [boolean]$append
+
+    $ErrorOccured = $false
+
+    ### Parameter checking
+    if ( "$privLoggingMessage" -eq "" )
     {
-        if ( test-path -Path "$absolutePath" )
+        # We should have at least on blank in the line.
+        $privLoggingMessage = " "
+    }
+    # Checking if a path is provided
+    if ( "$privAbsolutePathToLogFile" -eq "" -or $privAbsolutePathToLogFile -eq $null)
+    {
+        if ([Environment]::UserInteractive)
         {
-            return $true
+            Write-Host ">>>>> $privMessagePrefix empty string provided for path value. Canï¿½t log the message >$privLoggingMessage<." -ForegroundColor Red
         }
-        else
-        {
-            $result = $null
-            $result = New-Item -Path "$absolutePath" -ItemType directory -Force -ErrorAction SilentlyContinue -confirm:$false
-            if ( $? -eq $true )
-            {
-                return $true
-            }
-            else
-            {
-                return $false
-            }
-        }
+        $ErrorOccured = $true
     }
     else
     {
-        return $false
+        # Checking if the provided path is a folder
+        if (Test-Path -path "$privAbsolutePathToLogFile" -PathType Container)
+        {
+            if ([Environment]::UserInteractive)
+            {
+                Write-Host ">>>>> $privMessagePrefix Canï¿½t log the message >$privLoggingMessage< to a folder." -ForegroundColor Red
+            }
+            $ErrorOccured = $true
+        }
+        # Checking if the file is there
+        else
+        {
+            # If it is not yet there and we have append = true we will fail
+            if ( ! (Test-Path -path "$privAbsolutePathToLogFile") -and $privAppend -eq $true )
+            {
+                $privAppend = $false
+            }
+        }
+    }
+
+    # Writing to the file
+    if ( $ErrorOccured -eq $false )
+    {
+        ### Checking the encoding if there is content in the file.
+        $encoding = "unknown"
+        [byte[]]$byte = get-content -Encoding byte -ReadCount 4 -TotalCount 4 -Path "$privAbsolutePathToLogFile" -ErrorAction SilentlyContinue
+        if ($byte -ne $null)
+        {
+            if ( $byte[0] -eq 0xef -and $byte[1] -eq 0xbb -and $byte[2] -eq 0xbf )
+            { 
+                $encoding = "UTF8"
+            }
+            elseif ($byte[0] -eq 0xfe -and $byte[1] -eq 0xff)
+            {
+                $encoding = "Unicode"
+            }
+            elseif ($byte[0] -eq 0 -and $byte[1] -eq 0 -and $byte[2] -eq 0xfe -and $byte[3] -eq 0xff)
+            {
+                $encoding = "UTF32"
+            }
+            elseif ($byte[0] -eq 0x2b -and $byte[1] -eq 0x2f -and $byte[2] -eq 0x76)
+            {
+                $encoding = "UTF7"
+            }
+            else
+            {
+                $encoding = "ASCII"
+            }
+        }
+        ### if there is no content: Assuming ASCII
+        else
+        {
+            $encoding = "ASCII"
+        }
+
+        ### Writing the content to file
+        if ($privAppend -eq $false)
+        {
+            Write-Output "$privLoggingMessage" | Out-File -filePath "$privAbsolutePathToLogFile" -Encoding $encoding
+        }
+        else
+        {
+            # We can only append if a file is already there.
+            if (Get-Item -Path "$privAbsolutePathToLogFile" -Force -ErrorAction SilentlyContinue)
+            {
+                Write-Output "$privLoggingMessage" | Out-File -filePath "$privAbsolutePathToLogFile" -Encoding $encoding -Append
+            }
+            else
+            {
+                if ( [Environment]::UserInteractive )
+                {
+                    Write-Host ">>>>> $privMessagePrefix could not find path >$privAbsolutePathToLogFile<." -ForegroundColor Red
+                }
+            }
+        }
     }
 }
 #----------------------------------------------------------------------------------------------------------------------------------
+function multi-PurposeLogging
+{
+	param (
+		[parameter(Mandatory = $true, Position = 0)]
+		[string]$Message,
+		[parameter(Mandatory = $false, Position = 1)]
+		[ValidateSet('information', 'error', 'warning', 'success', 'verbose')]
+		[string]$Level = 'information',
+		[parameter(Mandatory = $false)]
+		[int]$IndentLevel = 0,
+		[parameter(Mandatory = $false)]
+		[string]$AbsolutePathToLogfile,
+		[parameter(Mandatory = $false)]
+		[bool]$CreateTimeStamp = $true,
+		[parameter(Mandatory = $false)]
+		[bool]$LogVerboseToSession
+	)
+	# Version 1.5
+	
+	## Downstream dependencies:
+	# - get-NiceTimeStamp
+	# - get-scriptabsolutepath
+	# - create-Folder
+	# - console-logging	
+	# - file-logging	
+	
+	## 'Local variables' ##
+	$privAbsolutePathToLogfile = $absolutePathToLogfile
+	$privCreateTimeStamp = $createTimeStamp
+	$privMessage = $message
+	$privLevel = $level
+	$privlogVerboseToSession = $logVerboseToSession
+	[string]$privPaddingCharacter = ' '
+	[int]$privPaddingMultiplier = 4
+	
+	## Parameter Checking for the logging function ##
+	
+	# We Need to enforce a logfile if we are not in an interactive session	
+	if ([string]::IsNullOrWhiteSpace($privAbsolutePathToLogfile))
+	{
+		# No value for this argument was passed with the call, therefore		
+		# attempt to default to global logfile path from the calling script		
+		$scriptLogFilePath = ( Get-Variable -Name globalMyLogFileAbsolutePath -Scope global -ValueOnly -ErrorAction SilentlyContinue )
+		if (-not ([string]::IsNullOrWhiteSpace($scriptLogFilePath)))
+		{
+			$privAbsolutePathToLogfile = $scriptLogFilePath
+		}
+	}
+	
+	if (-not ([environment]::UserInteractive))
+	{
+		if ([string]::IsNullOrEmpty($privAbsolutePathToLogfile))
+		{
+			return $false
+		}
+	}
+	
+	## Format the log message elements ##
+	
+	#  Add a Timestamp?
+	if ($privCreateTimeStamp)
+	{
+		[string]$privLoggingMessage += "$(get-NiceTimeStamp)  |  "
+	}
+	
+	# Set the Log Level	
+	switch ($privLevel)
+	{
+		'information'
+		{ $privLoggingMessage += "INFORMATION  |  "; break }
+		'error'
+		{ $privLoggingMessage += "ERROR        |  "; break }
+		'warning'
+		{ $privLoggingMessage += "WARNING      |  "; break }
+		'success'
+		{ $privLoggingMessage += "SUCCESS      |  "; break }
+		'verbose'
+		{ $privLoggingMessage += "VERBOSE      |  " }
+	}
+	
+	# Create an indenting level, if set		
+	if ($IndentLevel -gt 0)
+	{
+		$privPadding = $privPaddingCharacter * ( $privPaddingMultiplier * $IndentLevel )
+		$privLoggingMessage += $privPadding
+	}
+	
+	# Permit "auto-attribution" - Get the name of the calling function	
+	# from the stack and prepend to the message, if the first character	
+	# in the message is the @ symbol			
+	
+	if ($message[0] -eq '@')
+	{
+		$privCallStack 		= Get-PSCallStack
+		$privCallerName 	= $privCallStack[1].Command
+		$privLoggingMessage += $privCallerName
+		$privLoggingMessage += ':'
+		#remove the '@' from the msg string
+		$Message = $Message -replace '@',' '
+	}
+	
+	# Add the log message itself	
+	$privLoggingMessage += "$message"
+	
+	## Do the actual logging ##
+	
+	#Log to the console only if we are running interactively	
+	if ([Environment]::UserInteractive)
+	{
+		console-logging -message "$privLoggingMessage" -level "$privLevel" -logVerboseToSession $privlogVerboseToSession
+	}
+	
+	#Log to file in all scenarios
+	file-Logging -message "$privLoggingMessage" -logFileAbsolutePathName "$privAbsolutePathToLogfile" -append $true	
+}
+#----------------------------------------------------------------------------------------------------------------------------------
+function prepare-Logfile($logFileAbsolutePath)
+{
+    # Version 1.2
+    $errorOccured = $false
+    $privLogFileAbsolutePath = $logFileAbsolutePath
+
+    ### Now we get the path to the log-folder and -file ready.
+    $privLogFileFolderAbsolutePath = "$privLogFileAbsolutePath" -split "\\"
+    $privLogFileName = $privLogFileFolderAbsolutePath[-1]
+    $privLogFileFolderAbsolutePath = $privLogFileFolderAbsolutePath[0..($privLogFileFolderAbsolutePath.count-2)] -join '\'
+    $privLogFileFolderAbsolutePath += "\" 
+
+    ## checking if the folder exists / otherwise creating:
+    if (! (get-item -Path "$privLogFileFolderAbsolutePath" -ErrorAction SilentlyContinue ) )
+    {
+        if ( ! ( create-Folder -absolutePath "$privLogFileFolderAbsolutePath" ) )
+        {
+            $errorOccured = $true
+        }
+    }
+
+    ### Checking for the file and creating if necessary
+    if ($errorOccured -eq $false)
+    {
+        if ( ! (get-item -Path "$privLogFileAbsolutePath" -ErrorAction SilentlyContinue ) )
+        {
+            if ( ! (New-Item -Path "$privLogFileAbsolutePath" -ItemType file -ErrorAction SilentlyContinue) )
+            {
+                $errorOccured = $true
+            }
+        }
+    }
+
+    ### Returning the value
+    if ($errorOccured -eq $true)
+    {
+        return $false
+    }
+    else
+    {
+        return $true
+    }
+}
+#----------------------------------------------------------------------------------------------------------------------------------
+function write-Logitem($itemType)
+{
+    # Version 1.1
+
+    # This function uses multi-purpose-logging to write a "common" log message like Skript start, end, seperators.
+    if ( $itemType -ieq "start" )
+    {
+        multi-PurposeLogging -message "==============================================================================" -level "verbose" -logVerboseToSession $true
+        multi-PurposeLogging -message ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> SCRIPT START <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<" -level "verbose" -logVerboseToSession $true
+        multi-PurposeLogging -message "==============================================================================" -level "verbose" -logVerboseToSession $true
+    }
+    elseif ($itemType -ieq "end" )
+    {
+        multi-PurposeLogging -message "==============================================================================" -level "verbose" -logVerboseToSession $true
+        multi-PurposeLogging -message ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> SCRIPT END <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<" -level "verbose" -logVerboseToSession $true
+        multi-PurposeLogging -message "==============================================================================" -level "verbose" -logVerboseToSession $true
+    }
+    elseif ($itemType -ieq "smallseperator" )
+    {
+        multi-PurposeLogging -message "------------------------------------------------------------------------------" -level "verbose" -logVerboseToSession $true
+    }
+    elseif ($itemType -ieq "largeseperator" )
+    {
+        multi-PurposeLogging -message "==============================================================================" -level "verbose" -logVerboseToSession $true
+    }
+}
+
+#endregion
+
+#region ==================== SSY-related Functions ===================
+
 function create-SSY-V-Configuration-Backup($backupPath, $temporaryFolder)
 {
     # Version 1.5
@@ -1619,9 +2795,6 @@ function create-SSY-V-Powershellscripttask($taskName, $taskDescription, $taskScr
         return $true
     }
 }
-
-###################################################################################################################################
-##### FUNCTIONS STARTING WITH >D<
 #----------------------------------------------------------------------------------------------------------------------------------
 function DataCorePSModule($action)
 {
@@ -1669,7 +2842,7 @@ function DataCorePSModule($action)
                     $strProductKey = $regKey.getValue($bpKey)
                     $regKey = Get-Item "HKLM:\$strProductKey" -ErrorAction SilentlyContinue
                     $installPath = $regKey.getValue('InstallPath')
-                    ### We can´t use this directly in IF as this does not give true or false back
+                    ### We canï¿½t use this directly in IF as this does not give true or false back
                     # import the module
                     Import-Module "$installPath\DataCore.Executive.Cmdlets.dll" -DisableNameChecking -ErrorAction SilentlyContinue
                     # Check the result
@@ -1710,7 +2883,7 @@ function DataCorePSModule($action)
             if ( get-module -Name "DataCore.Executive.Cmdlets" )
             {
                 multi-PurposeLogging -message "$privMessagePrefix DataCore Commandlets loaded. Will unload them..." -level "information"
-                ### We can´t use this directly in IF as this does not give true or false back
+                ### We canï¿½t use this directly in IF as this does not give true or false back
                 Remove-Module -Name "DataCore.Executive.Cmdlets" -ErrorAction SilentlyContinue
                 if ( $? -eq $true )
                 {
@@ -2014,9 +3187,6 @@ function dcsService-Connection($user, $password, $hostname, $action, $dataCoreSe
         return $false
     }
 }
-
-###################################################################################################################################
-##### FUNCTIONS STARTING WITH >E<
 #----------------------------------------------------------------------------------------------------------------------------------
 function elect-SSY-V-Script-Governor($skipElection)
 {
@@ -2223,1073 +3393,10 @@ function export-SSY-V-DcsObjectModel ($backupPath, $temporaryFolder)
     }
 }
 
-###################################################################################################################################
-##### FUNCTIONS STARTING WITH >F<
-#----------------------------------------------------------------------------------------------------------------------------------
-function file-Logging($message, $logFileAbsolutePathName, $append)
-{
-    # Version 1.6
-    $privMessagePrefix = "$($MyInvocation.InvocationName) :"
+#endregion
 
-    $privAbsolutePathToLogFile = [string]$logFileAbsolutePathName
-    $privLoggingMessage = [string]$message   
-    $privAppend = [boolean]$append
+#region ========================= Stages =============================
 
-    $ErrorOccured = $false
-
-    ### Parameter checking
-    if ( "$privLoggingMessage" -eq "" )
-    {
-        # We should have at least on blank in the line.
-        $privLoggingMessage = " "
-    }
-    # Checking if a path is provided
-    if ( "$privAbsolutePathToLogFile" -eq "" -or $privAbsolutePathToLogFile -eq $null)
-    {
-        if ([Environment]::UserInteractive)
-        {
-            Write-Host ">>>>> $privMessagePrefix empty string provided for path value. Can´t log the message >$privLoggingMessage<." -ForegroundColor Red
-        }
-        $ErrorOccured = $true
-    }
-    else
-    {
-        # Checking if the provided path is a folder
-        if (Test-Path -path "$privAbsolutePathToLogFile" -PathType Container)
-        {
-            if ([Environment]::UserInteractive)
-            {
-                Write-Host ">>>>> $privMessagePrefix Can´t log the message >$privLoggingMessage< to a folder." -ForegroundColor Red
-            }
-            $ErrorOccured = $true
-        }
-        # Checking if the file is there
-        else
-        {
-            # If it is not yet there and we have append = true we will fail
-            if ( ! (Test-Path -path "$privAbsolutePathToLogFile") -and $privAppend -eq $true )
-            {
-                $privAppend = $false
-            }
-        }
-    }
-
-    # Writing to the file
-    if ( $ErrorOccured -eq $false )
-    {
-        ### Checking the encoding if there is content in the file.
-        $encoding = "unknown"
-        [byte[]]$byte = get-content -Encoding byte -ReadCount 4 -TotalCount 4 -Path "$privAbsolutePathToLogFile" -ErrorAction SilentlyContinue
-        if ($byte -ne $null)
-        {
-            if ( $byte[0] -eq 0xef -and $byte[1] -eq 0xbb -and $byte[2] -eq 0xbf )
-            { 
-                $encoding = "UTF8"
-            }
-            elseif ($byte[0] -eq 0xfe -and $byte[1] -eq 0xff)
-            {
-                $encoding = "Unicode"
-            }
-            elseif ($byte[0] -eq 0 -and $byte[1] -eq 0 -and $byte[2] -eq 0xfe -and $byte[3] -eq 0xff)
-            {
-                $encoding = "UTF32"
-            }
-            elseif ($byte[0] -eq 0x2b -and $byte[1] -eq 0x2f -and $byte[2] -eq 0x76)
-            {
-                $encoding = "UTF7"
-            }
-            else
-            {
-                $encoding = "ASCII"
-            }
-        }
-        ### if there is no content: Assuming ASCII
-        else
-        {
-            $encoding = "ASCII"
-        }
-
-        ### Writing the content to file
-        if ($privAppend -eq $false)
-        {
-            Write-Output "$privLoggingMessage" | Out-File -filePath "$privAbsolutePathToLogFile" -Encoding $encoding
-        }
-        else
-        {
-            # We can only append if a file is already there.
-            if (Get-Item -Path "$privAbsolutePathToLogFile" -Force -ErrorAction SilentlyContinue)
-            {
-                Write-Output "$privLoggingMessage" | Out-File -filePath "$privAbsolutePathToLogFile" -Encoding $encoding -Append
-            }
-            else
-            {
-                if ( [Environment]::UserInteractive )
-                {
-                    Write-Host ">>>>> $privMessagePrefix could not find path >$privAbsolutePathToLogFile<." -ForegroundColor Red
-                }
-            }
-        }
-    }
-}
-
-###################################################################################################################################
-##### FUNCTIONS STARTING WITH >G<
-#----------------------------------------------------------------------------------------------------------------------------------
-function get-NiceTimeStamp()
-{
-    # function to get a nice timestamp with the following format
-    $date = Get-Date -Format yyyy-MM-dd__HH-mm-ss
-    return $date
-}
-#----------------------------------------------------------------------------------------------------------------------------------
-function get-osLanguage()
-{
-    $privMessagePrefix = "$($MyInvocation.InvocationName) :"
-    multi-PurposeLogging -message "$privMessagePrefix Function invoked without parameters." -level "verbose"
-    
-    # Getting the OS Language from WMI
-    $languageCode = $null
-    $languageCode = ($Win32_OS = Get-WmiObject Win32_OperatingSystem).oslanguage
-    $languageInstalled = $null
-    if ($languageCode -eq "1031")
-    {
-        $languageInstalled = "german"
-        multi-PurposeLogging -message "$privMessagePrefix returns >$languageInstalled<." -level "success"
-        return $languageInstalled
-    }
-    elseif ($languageCode -eq "1033")
-    {
-        $languageInstalled = "english"
-        multi-PurposeLogging -message "$privMessagePrefix returns >$languageInstalled<." -level "success"
-        return $languageInstalled
-    }
-    else
-    {
-        multi-PurposeLogging -message "$privMessagePrefix returns >false<." -level "error"
-        return $false
-    }
-}
-#----------------------------------------------------------------------------------------------------------------------------------
-function get-PowershellVersion()
-{
-    # Version 1.1
-    $privMessagePrefix = "$($MyInvocation.InvocationName) :"
-    multi-PurposeLogging -message "$privMessagePrefix Function invoked without parameters." -level "verbose"
-
-    $ErrorOccured = $false 
-    $psVersion = $null
-    
-    ### The Doing
-    if ( $ErrorOccured -eq $false )
-    {
-        # Tryining to get the PSversion from an PS Object
-        $psversionObject = $null
-        $psversionObject = $PSVersionTable.PSVersion
-        $majorVersion = $null
-        $majorVersion = $psversionObject.Major
-        $minorVersion = $null
-        $minorVersion = $psversionObject.Minor
-        $psVersion = [float]$("$majorVersion" + "." + "$minorVersion")
-        
-        # if we do not get any Information then its either PS Version 1.0 because this table was introduced in 2.0 or Powershell is not available at all
-        if ( $psVersion -eq $null )
-        {
-            ## We are checking against the registry if PS is available at all
-            # moving to the HKLM drive
-            Set-Location HKLM:
-            $registryValue = $null
-            $registryValue = Get-ItemProperty HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\PowerShell\1\PowerShellEngine -ErrorAction SilentlyContinue
-            if ( $registryValue -ne $null )
-            {
-                $psVersion = [float]$($registryValue.PowerShellVersion)
-            }
-            else
-            {
-                multi-PurposeLogging -message "$privMessagePrefix could not determine Powershell version." -level "error"
-                $ErrorOccured = $false
-            }
-        }
-    }
-
-    ### Return value of the function
-    if ( $ErrorOccured -eq $true )
-    {
-        multi-PurposeLogging -message "$privMessagePrefix returns >false<." -level "error"
-        return $false
-    }
-    else
-    {
-        multi-PurposeLogging -message "$privMessagePrefix psversion is >$psVersion<." -level "verbose"
-        return [float]$psVersion
-    }
-}
-#----------------------------------------------------------------------------------------------------------------------------------
-function get-scriptabsolutefolderpath()
-{
-    # Version 1.1
-
-    # gets the parent path of the script. Is used to determine where to write logs etc.
-    $ErrorOccured = $false
-
-    ### THE DOING
-    $myAbsoluteScriptPath = $null
-    $myAbsoluteScriptPath = $($MyInvocation.PSCommandPath) -split "\\"
-    $myAbsoluteScriptPath = $myAbsoluteScriptPath[0..($myAbsoluteScriptPath.count-2)] -join '\'
-    $myAbsoluteScriptPath += "\"
-    if ( $myAbsoluteScriptPath )
-    {
-        # if we have a string not like C:\ or any other drive mapping 
-        if ( $myAbsoluteScriptPath -notlike "*:\*")
-        {
-            $ErrorOccured = $true
-        }
-        else
-        {
-            # Adding a Backslash if necessary
-            $pathStringLength = $($myAbsoluteScriptPath.Length)
-            if ( $( "$myAbsoluteScriptPath".Substring($pathStringLength-1) ) -ne "\" )
-            {
-                $myAbsoluteScriptPath = "$myAbsoluteScriptPath" + "\"
-            }
-        }
-    }
-    else
-    {
-        $ErrorOccured = $true
-    }
-    
-    ### Return value of the function
-    if ( $ErrorOccured -eq $true )
-    {
-        return $false
-    }
-    else
-    {
-        return "$myAbsoluteScriptPath"
-    }
-}
-#----------------------------------------------------------------------------------------------------------------------------------
-function get-scriptDate($path)
-{
-    $privPath = "$path"
-    $privMessagePrefix = "$($MyInvocation.InvocationName) :"
-    multi-PurposeLogging -message "$privMessagePrefix Function invoked with parameter path >$path<." -level "verbose"
-
-    $privScriptDate = $null
-    $privScriptDate = get-content "$privPath" | select-string -pattern "^# Script-Date:"
-    $privScriptDate = ($privScriptDate -replace "# Script-Date:","").trim()
-
-    if ($privScriptDate)
-    {
-        multi-PurposeLogging -message "$privMessagePrefix Function returns >$privScriptDate<." -level "success"
-        return $privScriptDate
-    }
-    else
-    {
-        multi-PurposeLogging -message "$privMessagePrefix could not find ># Script-Date:<. Function returns >false<." -level "warning"
-        return $false
-    }
-}
-#----------------------------------------------------------------------------------------------------------------------------------
-function get-scriptName()
-{
-    # gets the parent path of the script. Is used to determine where to write logs etc.
-    $myAbsoluteScriptPath = $null
-    $myAbsoluteScriptPath = $($MyInvocation.PSCommandPath) -split "\\"
-    $globalMyScriptName = $myAbsoluteScriptPath[($myAbsoluteScriptPath.count-1)] -replace ".ps1"
-    if ( $globalMyScriptName )
-    {
-        return "$globalMyScriptName"
-    }
-    else
-    {
-        return $false
-    }
-}
-#----------------------------------------------------------------------------------------------------------------------------------
-function get-scriptParametersAsString($absolutePathToScript,$includeIgnoreParameters)
-{
-    # Version 1.1
-
-    # gets the parameters in a re-usable format for powershell.exe
-    # non-logging function - we fly blind...
-    $privAbsolutePathToScript = [string]$absolutePathToScript
-    $privIncludeIgnoreParameters = [boolean]$includeIgnoreParameters
-
-    $ErrorOccured = $false
-
-    ### Parameter Check
-    if ( "$privAbsolutePathToScript" -eq "")
-    {
-        $ErrorOccured = $true
-    }
-    else
-    {
-        if ( -not ( test-path -path "$privAbsolutePathToScript" ) )
-        {
-            $ErrorOccured = $true
-        }
-    }
-
-    ### THE DOING
-    if ( $ErrorOccured -eq $false )
-    {
-        $parametersAsString = ""
-        
-        $parameters = $null
-        $parameters = $( get-command "$privAbsolutePathToScript" ).Parameters
-        $parameterKeys = $null
-        $parameterKeys = $parameters.Keys
-
-        foreach ( $parameterKey in $parameterKeys )
-        {
-            try
-            {
-                $parameter = $null
-                $parameter = Get-Variable $parameterKey -ErrorAction Stop
-                $parameterName = $null
-                $parameterName = [string]$($parameter.Name)
-                
-                # Standard-Operation is to exclude "ignore-" parameters. But override also processes them.
-                if ( -not ( "$parameterName" -ilike "ignore*" ) -or $privIncludeIgnoreParameters -eq $true )
-                {
-                    $parameterValue = $null
-                    $parameterValue = $($parameter.value)
-                    if ( "$parameterValue" -ieq "false" )
-                    {
-                        $parameterValue = 0
-                    }
-                    elseif ( "$parameterValue" -ieq "true" )
-                    {
-                        $parameterValue = 1
-                    }
-                    else
-                    {
-                        $parameterValue = "'$parameterValue'"
-                    }
-
-                    $parametersAsString+="-$parameterName "
-                    $parametersAsString+="$parameterValue "
-                }
-            }
-            catch
-            {
-                # Do nothing
-            }
-        }
-    }
-
-    ### Return value of the function
-    if ( $ErrorOccured -eq $true )
-    {
-        return $false
-    }
-    else
-    {
-        return "$parametersAsString"
-    }
-}
-#----------------------------------------------------------------------------------------------------------------------------------
-function get-scriptVersion($path)
-{
-    # Version 1.1
-    $privPath = "$path"
-    $privMessagePrefix = "$($MyInvocation.InvocationName) :"
-    multi-PurposeLogging -message "$privMessagePrefix Function invoked with parameter path >$path<." -level "verbose"
-
-    $privScriptVersion = $null
-    $privScriptVersion = get-content "$privPath" | Select-String -pattern "^# Script-Version:"
-    $privScriptVersion = ($privScriptVersion -replace "# Script-Version:","").trim()
-
-    if ($privScriptVersion)
-    {
-        multi-PurposeLogging -message "$privMessagePrefix Function returns >$privScriptVersion<." -level "success"
-        return $privScriptVersion
-    }
-    else
-    {
-        multi-PurposeLogging -message "$privMessagePrefix could not find ># Script-Version:<. Function returns >false<." -level "warning"
-        return $false
-    }
-}
-
-###################################################################################################################################
-##### FUNCTIONS STARTING WITH >H<
-
-###################################################################################################################################
-##### FUNCTIONS STARTING WITH >I<
-
-###################################################################################################################################
-##### FUNCTIONS STARTING WITH >J<
-
-###################################################################################################################################
-##### FUNCTIONS STARTING WITH >K<
-
-###################################################################################################################################
-##### FUNCTIONS STARTING WITH >L<
-
-###################################################################################################################################
-##### FUNCTIONS STARTING WITH >M<
-#----------------------------------------------------------------------------------------------------------------------------------
-function multi-PurposeLogging
-{
-	param (
-		[parameter(Mandatory = $true, Position = 0)]
-		[string]$Message,
-		[parameter(Mandatory = $false, Position = 1)]
-		[ValidateSet('information', 'error', 'warning', 'success', 'verbose')]
-		[string]$Level = 'information',
-		[parameter(Mandatory = $false)]
-		[int]$IndentLevel = 0,
-		[parameter(Mandatory = $false)]
-		[string]$AbsolutePathToLogfile,
-		[parameter(Mandatory = $false)]
-		[bool]$CreateTimeStamp = $true,
-		[parameter(Mandatory = $false)]
-		[bool]$LogVerboseToSession
-	)
-	# Version 1.5
-	
-	## Downstream dependencies:
-	# - get-NiceTimeStamp
-	# - get-scriptabsolutepath
-	# - create-Folder
-	# - console-logging	
-	# - file-logging	
-	
-	## 'Local variables' ##
-	$privAbsolutePathToLogfile = $absolutePathToLogfile
-	$privCreateTimeStamp = $createTimeStamp
-	$privMessage = $message
-	$privLevel = $level
-	$privlogVerboseToSession = $logVerboseToSession
-	[string]$privPaddingCharacter = ' '
-	[int]$privPaddingMultiplier = 4
-	
-	## Parameter Checking for the logging function ##
-	
-	# We Need to enforce a logfile if we are not in an interactive session	
-	if ([string]::IsNullOrWhiteSpace($privAbsolutePathToLogfile))
-	{
-		# No value for this argument was passed with the call, therefore		
-		# attempt to default to global logfile path from the calling script		
-		$scriptLogFilePath = ( Get-Variable -Name globalMyLogFileAbsolutePath -Scope global -ValueOnly -ErrorAction SilentlyContinue )
-		if (-not ([string]::IsNullOrWhiteSpace($scriptLogFilePath)))
-		{
-			$privAbsolutePathToLogfile = $scriptLogFilePath
-		}
-	}
-	
-	if (-not ([environment]::UserInteractive))
-	{
-		if ([string]::IsNullOrEmpty($privAbsolutePathToLogfile))
-		{
-			return $false
-		}
-	}
-	
-	## Format the log message elements ##
-	
-	#  Add a Timestamp?
-	if ($privCreateTimeStamp)
-	{
-		[string]$privLoggingMessage += "$(get-NiceTimeStamp)  |  "
-	}
-	
-	# Set the Log Level	
-	switch ($privLevel)
-	{
-		'information'
-		{ $privLoggingMessage += "INFORMATION  |  "; break }
-		'error'
-		{ $privLoggingMessage += "ERROR        |  "; break }
-		'warning'
-		{ $privLoggingMessage += "WARNING      |  "; break }
-		'success'
-		{ $privLoggingMessage += "SUCCESS      |  "; break }
-		'verbose'
-		{ $privLoggingMessage += "VERBOSE      |  " }
-	}
-	
-	# Create an indenting level, if set		
-	if ($IndentLevel -gt 0)
-	{
-		$privPadding = $privPaddingCharacter * ( $privPaddingMultiplier * $IndentLevel )
-		$privLoggingMessage += $privPadding
-	}
-	
-	# Permit "auto-attribution" - Get the name of the calling function	
-	# from the stack and prepend to the message, if the first character	
-	# in the message is the @ symbol			
-	
-	if ($message[0] -eq '@')
-	{
-		$privCallStack 		= Get-PSCallStack
-		$privCallerName 	= $privCallStack[1].Command
-		$privLoggingMessage += $privCallerName
-		$privLoggingMessage += ':'
-		#remove the '@' from the msg string
-		$Message = $Message -replace '@',' '
-	}
-	
-	# Add the log message itself	
-	$privLoggingMessage += "$message"
-	
-	## Do the actual logging ##
-	
-	#Log to the console only if we are running interactively	
-	if ([Environment]::UserInteractive)
-	{
-		console-logging -message "$privLoggingMessage" -level "$privLevel" -logVerboseToSession $privlogVerboseToSession
-	}
-	
-	#Log to file in all scenarios
-	file-Logging -message "$privLoggingMessage" -logFileAbsolutePathName "$privAbsolutePathToLogfile" -append $true	
-}
-
-###################################################################################################################################
-##### FUNCTIONS STARTING WITH >N<
-#----------------------------------------------------------------------------------------------------------------------------------
-function NtfsPermission($fileOrFolderPath, $UserOrGroup, $accessPermission, $permissionType, $inheritMode, $propagationMode, $modificationType )
-{
-    ### Examples for the usage of this function
-    <##
-    ## Hyper-V Knoten
-    $myfolder = "c:\test"
-    $mygroup = "user1"
-    $myaccessPermission = "ReadAndExecute"
-    $myInheritMode = "containerinherit,objectinherit"
-    $mypropagationmode = "none"
-    $mymodificationtype = "setrule"
-    $mypermissiontype = "allow"
-    $result = NtfsPermission -fileOrFolderPath "$myfolder" -UserOrGroup "$mygroup" -accessPermission "$myaccessPermission" -permissionType "$mypermissiontype" -inheritMode "$myInheritMode" -propagationMode "$mypropagationmode" -modificationType "$mymodificationType"
-
-    $myfolder = "c:\test"
-    $mygroup = "group1"
-    $myaccessPermission = "ReadAndExecute"
-    $myInheritMode = "none"
-    $mypropagationmode = "none"
-    $mymodificationtype = "setrule"
-    $mypermissiontype = "allow"
-    $result = NtfsPermission -fileOrFolderPath "$myfolder" -UserOrGroup "$mygroup" -accessPermission "$myaccessPermission" -permissionType "$mypermissiontype" -inheritMode "$myInheritMode" -propagationMode "$mypropagationmode" -modificationType "$mymodificationType"
-
-    $myfolder = "C:\test\subfolder-a"
-    $mygroup = "subfolder-a_re"
-    $myaccessPermission = "ReadAndExecute"
-    $myInheritMode = "none"
-    $mypropagationmode = "none"
-    $mymodificationtype = "setrule"
-    $mypermissiontype = "allow"
-    $result = NtfsPermission -fileOrFolderPath "$myfolder" -UserOrGroup "$mygroup" -accessPermission "$myaccessPermission" -permissionType "$mypermissiontype" -inheritMode "$myInheritMode" -propagationMode "$mypropagationmode" -modificationType "$mymodificationType"
-
-    $myfolder = "C:\test\anotherfolder"
-    $mygroup = "anothergroup_fullaccess"
-    $myaccessPermission = "FullControl"
-    $myInheritMode = "containerinherit,objectinherit"
-    $mypropagationmode = "inheritonly"
-    $mymodificationtype = "addrule"
-    $mypermissiontype = "allow"
-    $result = NtfsPermission -fileOrFolderPath "$myfolder" -UserOrGroup "$mygroup" -accessPermission "$myaccessPermission" -permissionType "$mypermissiontype" -inheritMode "$myInheritMode" -propagationMode "$mypropagationmode" -modificationType "$mymodificationType"
-    ##>
-
-    $privFileOrFolderPath = $fileOrFolderPath
-    $privUserOrGroup = $UserOrGroup
-    $privAccessPermission = $accessPermission
-    $privPermissionType = $permissionType
-    $privInheritMode = $inheritMode
-    $privPropagationMode = $propagationMode
-    $privModificationType = $modificationType
-    
-    $privMessagePrefix = "$($MyInvocation.InvocationName) :"
-    multi-PurposeLogging -message "$privMessagePrefix Function invoked. Parameter privFileOrFolderPath has value >$privFileOrFolderPath< privUserOrGroup >$privUserOrGroup<, privAccessPermission >$privAccessPermission<, privPermissionType >$privPermissionType<, privInheritMode is >$privInheritMode<, privPropagationMode >$privPropagationMode<, privModificationType is >$privModificationType<." -level "verbose"
-    
-    $errorOccured = $false
-    
-    ##### Parameter-Checking  
-    # Check if the parameters are there    
-    if ( ! ( $privFileOrFolderPath.length -gt 1 ) -and `
-         ! ( $privUserOrGroup.length -gt 1 ) -and `
-         ! ( $privAccessPermission.length -gt 1 ) -and  `
-         ! ( $privModificationType.length -gt 1 ) )
-    {
-        multi-PurposeLogging -message "$privMessagePrefix please provide at least >privFileOrFolderPath<, >privUserOrGroup<, >privAccessPermission< and >privModificationType<." -level "error"
-        $errorOccured = $true
-    }
-    # check the values for inherit-mode
-    if (   ! ( $($privInheritMode) -ieq "containerinherit,objectinherit" ) -and `
-           ! ( $($privInheritMode) -ieq "containerinherit" ) -and ` 
-           ! ( $($privInheritMode) -ieq "objectinherit" )  -and `
-           ! ( $($privInheritMode) -ieq "none" ) )
-    {
-        multi-PurposeLogging -message "$privMessagePrefix wrong parameter provided for >privInheritMode<. Allowed are >containerinherit<, >objectinherit<, >none< or >containerinherit,objectinherit<." -level "error"
-        $errorOccured = $true
-    }
-    # validate permission
-    if (   ! ( $($privPermissionType) -ieq "allow" ) -and `
-           ! ( $($privPermissionType) -ieq "deny" ) )
-    {
-        multi-PurposeLogging -message "$privMessagePrefix wrong parameter provided for >privPermissionType<. Allowed are >allow<, >deny<." -level "error"
-        $errorOccured = $true
-    }
-    # check modification-type
-    if (   ! ( $($privModificationType) -ieq "addrule" ) -and `
-           ! ( $($privModificationType) -ieq "setrule" ) )
-    {
-        multi-PurposeLogging -message "$privMessagePrefix wrong parameter provided for >privModificationType<. Allowed are >addrule<, >setrule<." -level "error"
-        $errorOccured = $true
-    }
-    # check Propagation    
-    if (    ! ( $($privPropagationMode) -ieq "none" ) -and `
-            ! ( $($privPropagationMode) -ieq "inheritonly" ) )
-    {
-        multi-PurposeLogging -message "$privMessagePrefix wrong parameter provided for >privPropagationMode<. Allowed are >none<, >inheritonly<." -level "error"
-        $errorOccured = $true
-    }
-    # Check the provided access-permissions which should be applied.
-    $privAccessPermissionArray = @()
-    $privAccessPermissionArray = $privAccessPermission -split ","
-    foreach ($item in $privAccessPermissionArray)
-    {
-        ## alowed permissions : ListDirectory, ReadData, WriteData, CreateFiles, CreateDirectories, AppendData, ReadExtendedAttributes, 
-        # WriteExtendedAttributes, Traverse, ExecuteFile, DeleteSubdirectoriesAndFiles, ReadAttributes, WriteAttributes, Write, Delete, 
-        # ReadPermissions, Read, ReadAndExecute, Modify, ChangePermissions, TakeOwnership, Synchronize, FullControl
-        $permission = $null
-        $item = $item.trim()
-        if ( ( $($item) -ieq "read" ) )
-        {
-            $permission = "Read"
-        }
-        elseif ( $($item) -ieq "execute" ) 
-        {
-            $permission = "Execute"
-        }
-        elseif ( $($item) -ieq "readandexecute" )
-        {
-            $permission = "ReadAndExecute"
-        }
-        elseif ( $($item) -ieq "modify" )
-        {
-            $permission = "Modify"
-        }        
-        elseif ( $($item) -ieq "fullcontrol" )
-        {
-            $permission = "FullControl"
-        } 
-        elseif ( $($item) -ieq "delete" )
-        {
-            $permission = "Delete"
-        } 
-        elseif ( $($item) -ieq "writeattributes" )
-        {
-            $permission = "WriteAttributes"
-        } 
-        elseif ( $($item) -ieq "writeextendedattributes" )
-        {
-            $permission = "WriteExtendedAttributes"
-        } 
-        else
-        {
-            multi-PurposeLogging -message "$privMessagePrefix wrong parameter provided for >privAccessPermission<. Allowed are >read<, >execute<, >readandexecute<, >modify<, >fullcontrol<, >delete<, >writeattributes<, >writeextendedattributes<." -level "warning"
-            multi-PurposeLogging -message "$privMessagePrefix skipping >$item<." -level "warning"
-            $errorOccured = $true
-        }
-
-        ## Add to the permissions list
-        $privAccessPermissionList = ""
-        $privAccessPermissionList = "$privAccessPermissionList" + "$permission"
-        $privAccessPermissionCounter = 0
-        ## Add a separator
-        if ( ( $privAccessPermissionCounter -ne 0 ) -and `
-             ( $privAccessPermissionCounter -ne $($privAccessPermissionArray.Length()) ) )
-        {
-            $privAccessPermissionList = "$privAccessPermissionList" + ","
-        }
-
-        $privAccessPermissionCounter++
-    }
-
-    ##### The Doing
-    ## Testing for the path
-    if ( ! (get-item -Path "$privFileOrFolderPath" -ErrorAction SilentlyContinue ) )
-    {
-        multi-PurposeLogging -message "$privMessagePrefix could not find >$privFileOrFolderPath<." -level "error"
-        $errorOccured = $true
-    }
-
-    ## Adding the ACL
-    if ($errorOccured -eq $false)
-    {
-        ### Grab the current ACL data
-        $currentACL = @()
-        $currentACL = Get-Acl "$privFileOrFolderPath"
-
-        ### on rule modification (set)
-        if ( $($privModificationType) -ieq "setrule")
-        {
-            multi-PurposeLogging -message "$privMessagePrefix modifying access rule for >$privFileOrFolderPath<. User/group >$privUserOrGroup< and permission >$privAccessPermissionList<." -level "information"
-
-            ### create the modified access rule
-            try
-            {
-                $modifiedAccessRule = New-Object system.security.accesscontrol.filesystemaccessrule("$privUserOrGroup","$privAccessPermissionList","$privInheritMode","$privPropagationMode","$privPermissionType")
-                $modifiedACL = $currentACL
-                $modifiedACL.SetAccessRule($modifiedAccessRule)
-                ### write the ACL
-                Set-Acl "$privFileOrFolderPath" $modifiedACL -ErrorAction SilentlyContinue
-                if ($?)
-                {
-                    multi-PurposeLogging -message "$privMessagePrefix success." -level "success"
-                }
-                else
-                {
-                    throw $($error[0])
-                }
-            }
-            catch
-            {
-                multi-PurposeLogging -message "$privMessagePrefix failed. This is the error-message >$($error[0])<." -level "error"
-                $errorOccured = $true
-            }
-        }
-        ### on rule creation
-        elseif ( $($privModificationType) -ieq "addrule" )
-        {
-            multi-PurposeLogging -message "$privMessagePrefix creating access rule for >$privFileOrFolderPath<. User/group >$privUserOrGroup< and permission >$privAccessPermissionList<." -level "information"
-
-            ### create the new access rule
-            try
-            {
-                $newAccessRule = New-Object system.security.accesscontrol.filesystemaccessrule("$privUserOrGroup","$privAccessPermissionList","$privInheritMode","$privPropagationMode","$privPermissionType")
-                $newACL = $currentACL
-                $newACL.AddAccessRule($newAccessRule)
-                ### write the ACL
-                Set-Acl "$privFileOrFolderPath" $newACL -ErrorAction SilentlyContinue
-                if ($?)
-                {
-                    multi-PurposeLogging -message "$privMessagePrefix success." -level "success"
-                }
-                else
-                {
-                    throw $($error[0])
-                }
-            }
-            catch
-            {
-                multi-PurposeLogging -message "$privMessagePrefix failed. This is the error-message >$($error[0])<." -level "error"
-                $errorOccured = $true
-            }
-        }
-    }
-
-    ### the Returning value
-    if ($errorOccured -eq $true)
-    {
-        multi-PurposeLogging -message "$privMessagePrefix returns >false<" -level "error"
-        return $false
-    }
-    else
-    {
-        multi-PurposeLogging -message "$privMessagePrefix returns >true<" -level "success"
-        return $true
-    }
-}
-
-###################################################################################################################################
-##### FUNCTIONS STARTING WITH >O<
-
-###################################################################################################################################
-##### FUNCTIONS STARTING WITH >P<
-#----------------------------------------------------------------------------------------------------------------------------------
-function pause()
-{
-    # Function to wait for keystroke
-	$null = $host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
-}
-#----------------------------------------------------------------------------------------------------------------------------------
-function powerShellProfiles($action)
-{
-    # Version 1.1
-
-    $privaction = $action.toLower()
-    $privMessagePrefix = "$($MyInvocation.InvocationName) :"
-    
-    $errorOccured = $false
-
-    multi-PurposeLogging -message "$privMessagePrefix Function invoked. Parameter privAction has value >$privaction<. " -level "verbose"
-    multi-PurposeLogging -message "$privMessagePrefix Setting Powershell profiles to >$privaction<." -level "information"
-    
-    if ( $privaction -ne "enable" -and $privaction -ne "disable" )
-    {
-        $errorOccured = $true
-        multi-PurposeLogging -message "$privMessagePrefix Function invoked. Parameter privTargetValue has value >$privTargetValue<. privSilent has value >$privSilent<." -level "verbose"
-        multi-PurposeLogging -message "$privMessagePrefix Setting Quickedit registry key(s) to >$privTargetValue<." -level "information"
-    }
-
-    # Doing the configuration
-    try
-    {
-        $profileArray = @(  $($profile),
-                            $($profile.AllUsersAllHosts),
-                            $($profile.AllUsersCurrentHost),
-                            $($profile.CurrentUserAllHosts),
-                            $($profile.CurrentUserCurrentHost)
-                        )
-        
-        $profileFound = $false
-        $attachString = "_disabled"
-        $guidString = "$([System.Guid]::NewGuid().ToString())"
-        
-        foreach ( $item in $profileArray )
-        {
-            $profilePath = $item
-
-            if ( $privaction -eq "disable" )
-            {
-                if ( Test-Path -path "$profilePath" -ErrorAction SilentlyContinue )
-                {
-                    # check if there is already a file with "disabled"
-                    $profileFile = Get-Item -Path "$profilePath"
-                    $parentPath = ($profileFile).DirectoryName
-                    $filename = ($profileFile).BaseName
-                    $fileExtension = ($profileFile).Extension
-                
-                    $disabledFileName = "$filename$attachString"
-                
-                    if ( test-path -path "$parentPath\$disabledFileName$fileExtension" -ErrorAction SilentlyContinue )
-                    {
-                        multi-PurposeLogging -message "$privMessagePrefix      Found already disabled profile >$parentPath\$disabledFileName$fileExtension" -level "verbose"
-                        $newfileName=$($disabledFileName -replace "$attachString","_$guidstring")
-                        multi-PurposeLogging -message "$privMessagePrefix      renaming to >$newfileName<." -level "verbose"
-                        $result = $null
-                        $result = Move-Item "$parentPath\$disabledFileName$fileExtension" -Destination "$parentPath\$newfileName$fileExtension" -Force -Confirm:$false
-                        if ( $? -eq $false )
-                        {
-                            $errorOccured = $true
-                        }
-                    }
-                    else
-                    {
-                        $newfileName = "$filename$attachString"
-                    }
-
-                    # Renaming the current profile.
-                    multi-PurposeLogging -message "$privMessagePrefix      disabling profile >$profilePath<." -level "verbose"
-
-                    $result = $null
-                    $result = Move-Item "$parentPath\$filename$fileExtension" -Destination "$parentPath\$disabledFileName$fileExtension" -Force -Confirm:$false
-                    if ( $? -eq $false )
-                    {
-                        $errorOccured = $true
-                    }
-                    
-                    ### Store that we found at least on profile.  
-                    $profileFound = $true
-                }
-                else
-                {
-                    multi-PurposeLogging -message "$privMessagePrefix no profile found in path >$profilePath<." -level "verbose"
-                }
-            }
-            elseif ( $privaction -eq "enable" )
-            {
-                $restoreProfile = $true
-
-                ### Get the filename of the disabled file. this is a string operation.
-                $baseName = $($profilePath -split "\\")[-1] -replace ".ps1",""
-                $parentFolderArray = $($profilePath -split "\\" )
-                $parentFolder = $parentFolderArray[0..($parentFolderArray.count-2)] -join '\'
-                $parentFolder = "$parentFolder" + "\"
-                $disabledFileName = "$parentFolder$baseName$attachString.ps1"
-
-                if ( Test-Path -path "$profilePath" -ErrorAction SilentlyContinue )
-                {
-                    multi-PurposeLogging -message "$privMessagePrefix already profile found in path >$profilePath<." -level "verbose"
-                    $restoreProfile = $false
-                }
-                
-                if ( Test-Path -path "$disabledFileName" -ErrorAction SilentlyContinue )
-                {
-                    if ( $restoreProfile -eq $true )
-                    {
-                        # Renaming the current profile.
-                        multi-PurposeLogging -message "$privMessagePrefix profile found in path  >$disabledFileName<." -level "verbose"
-                        multi-PurposeLogging -message "$privMessagePrefix restoring profile >$profilePath<." -level "verbose"
-                        $result = $null
-                        $result = Move-Item "$disabledFileName" -Destination "$profilePath" -Force -Confirm:$false
-                        if ( $? -eq $false )
-                        {
-                            $errorOccured = $true
-                        }
-                    }
-                    else
-                    {
-                        multi-PurposeLogging -message "$privMessagePrefix skipping restore as a new profile has been created found in path >$profilePath<." -level "warning"
-                    }
-                }
-                else
-                {
-                    multi-PurposeLogging -message "$privMessagePrefix no disabled profile found in path >$disabledFileName<." -level "verbose"
-                }
-            }
-        }
-    }
-    catch
-    {
-        multi-PurposeLogging -message "$privMessagePrefix an error occured while >$privaction< the Powershell profiles." -level "error"
-    }
-
-    ## Returning the value of the Function.
-    if ( $ErrorOccured -eq $true )
-    {
-        multi-PurposeLogging -message "$privMessagePrefix returns >false<." -level "error"
-        return $false
-    }
-    else
-    {
-        if ( $privaction -eq "disable" )
-        {
-            if ( $profileFound -eq $true )
-            {
-                multi-PurposeLogging -message "$privMessagePrefix returns the value >profilefound<." -level "success"
-                return "profilefound"
-            }
-            elseif ( $profileFound -eq $false )
-            {
-                multi-PurposeLogging -message "$privMessagePrefix returns the value >noprofilefound<." -level "success"
-                return "noprofilefound"
-            }
-        }
-        else
-        {
-            multi-PurposeLogging -message "$privMessagePrefix returns >true<." -level "success"
-            return $true
-        }
-    }
-}
-#----------------------------------------------------------------------------------------------------------------------------------
-function prepare-Logfile($logFileAbsolutePath)
-{
-    # Version 1.2
-    $errorOccured = $false
-    $privLogFileAbsolutePath = $logFileAbsolutePath
-
-    ### Now we get the path to the log-folder and -file ready.
-    $privLogFileFolderAbsolutePath = "$privLogFileAbsolutePath" -split "\\"
-    $privLogFileName = $privLogFileFolderAbsolutePath[-1]
-    $privLogFileFolderAbsolutePath = $privLogFileFolderAbsolutePath[0..($privLogFileFolderAbsolutePath.count-2)] -join '\'
-    $privLogFileFolderAbsolutePath += "\" 
-
-    ## checking if the folder exists / otherwise creating:
-    if (! (get-item -Path "$privLogFileFolderAbsolutePath" -ErrorAction SilentlyContinue ) )
-    {
-        if ( ! ( create-Folder -absolutePath "$privLogFileFolderAbsolutePath" ) )
-        {
-            $errorOccured = $true
-        }
-    }
-
-    ### Checking for the file and creating if necessary
-    if ($errorOccured -eq $false)
-    {
-        if ( ! (get-item -Path "$privLogFileAbsolutePath" -ErrorAction SilentlyContinue ) )
-        {
-            if ( ! (New-Item -Path "$privLogFileAbsolutePath" -ItemType file -ErrorAction SilentlyContinue) )
-            {
-                $errorOccured = $true
-            }
-        }
-    }
-
-    ### Returning the value
-    if ($errorOccured -eq $true)
-    {
-        return $false
-    }
-    else
-    {
-        return $true
-    }
-}
-
-###################################################################################################################################
-##### FUNCTIONS STARTING WITH >Q<
-
-###################################################################################################################################
-##### FUNCTIONS STARTING WITH >R<
-
-###################################################################################################################################
-##### FUNCTIONS STARTING WITH >S<
-#----------------------------------------------------------------------------------------------------------------------------------
-function sha512hash($absolutePath,$silent)
-{
-    # Version 1.3
-    $privAbsolutePath = "$absolutePath"
-    $privSilent = $silent
-
-    $privMessagePrefix = "$($MyInvocation.InvocationName) :"
-    if ($privSilent -ne $true)
-    {
-        $privSilent = $false
-        multi-PurposeLogging -message "$privMessagePrefix Function invoked. Parameter privAbsolutePath has value >$privAbsolutePath<, privSilent has value >$privSilent<)." -level "verbose"
-    }
-    
-    ### parameter checking
-    if ($privAbsolutePath -eq "" -or $privAbsolutePath -eq $null)
-    {
-        multi-PurposeLogging -message "$privMessagePrefix no path provided." -level "error"
-        return $false
-    }
-
-    ### checking if the file is there.
-    $fullPath = Resolve-Path $absolutePath
-    if (Test-Path -path "$fullPath" -ErrorAction SilentlyContinue)
-    {
-        ### getting the hash
-        $hashProvider = new-object -TypeName System.Security.Cryptography.SHA512CryptoServiceProvider
-        $fileToHash = [System.IO.File]::Open($fullPath,[System.IO.Filemode]::Open, [System.IO.FileAccess]::Read)
-        $hashResult=[System.BitConverter]::ToString($hashProvider.ComputeHash($fileToHash))
-        multi-PurposeLogging -message "$privMessagePrefix     file >$fullpath< has hash >$hashResult<." -level "verbose"
-        $fileToHash.Dispose()
-        if ($privSilent -ne $true)
-        {
-            multi-PurposeLogging -message "$privMessagePrefix returns the file hash." -level "success"
-        }
-        return $hashResult
-    }
-    else
-    {
-        multi-PurposeLogging -message "$privMessagePrefix there is no item in path provided." -level "error"
-        return $false        
-    }
-}
-#----------------------------------------------------------------------------------------------------------------------------------
-function sleepTimer($sleeptime,$maxCounter)
-{
-    # Version 1.1
-    $privSleepTime = [int32]$sleeptime
-    $privMaxCounter = [int32]$maxCounter
-    $counter = 1
-
-    if ($privSleepTime -eq 0)
-    {
-        $privSleepTime = 1
-    }
-    if ($privMaxCounter -eq 0)
-    {
-        $privMaxCounter = 3
-    }
-
-    while ($counter -le $privMaxCounter)
-    {
-        sleep $privSleepTime
-        if ([Environment]::UserInteractive -and $counter -eq $privMaxCounter)
-        { Write-Host "." }
-        elseif ([Environment]::UserInteractive)
-        { Write-Host -NoNewline "." }
-        $counter++
-    }
-}
-#----------------------------------------------------------------------------------------------------------------------------------
 function stage-0($quickeditProtection,$ensureElevation)
 {
     # Version 1.8
@@ -4671,170 +4778,11 @@ function stage-n()
         }
     }
 }
-###################################################################################################################################
-##### FUNCTIONS STARTING WITH >T<
 
-###################################################################################################################################
-##### FUNCTIONS STARTING WITH >U<
+#endregion
 
-###################################################################################################################################
-##### FUNCTIONS STARTING WITH >V<
+#region ======================= SCRIPT MAIN ==========================
 
-###################################################################################################################################
-##### FUNCTIONS STARTING WITH >W<
-#----------------------------------------------------------------------------------------------------------------------------------
-function write-Logitem($itemType)
-{
-    # Version 1.1
-
-    # This function uses multi-purpose-logging to write a "common" log message like Skript start, end, seperators.
-    if ( $itemType -ieq "start" )
-    {
-        multi-PurposeLogging -message "==============================================================================" -level "verbose" -logVerboseToSession $true
-        multi-PurposeLogging -message ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> SCRIPT START <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<" -level "verbose" -logVerboseToSession $true
-        multi-PurposeLogging -message "==============================================================================" -level "verbose" -logVerboseToSession $true
-    }
-    elseif ($itemType -ieq "end" )
-    {
-        multi-PurposeLogging -message "==============================================================================" -level "verbose" -logVerboseToSession $true
-        multi-PurposeLogging -message ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> SCRIPT END <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<" -level "verbose" -logVerboseToSession $true
-        multi-PurposeLogging -message "==============================================================================" -level "verbose" -logVerboseToSession $true
-    }
-    elseif ($itemType -ieq "smallseperator" )
-    {
-        multi-PurposeLogging -message "------------------------------------------------------------------------------" -level "verbose" -logVerboseToSession $true
-    }
-    elseif ($itemType -ieq "largeseperator" )
-    {
-        multi-PurposeLogging -message "==============================================================================" -level "verbose" -logVerboseToSession $true
-    }
-}
-
-###################################################################################################################################
-##### FUNCTIONS STARTING WITH >X<
-
-###################################################################################################################################
-##### FUNCTIONS STARTING WITH >Y<
-
-###################################################################################################################################
-##### FUNCTIONS STARTING WITH >Z<
-#----------------------------------------------------------------------------------------------------------------------------------
-function zip-foldercontent($absolutePathToSourceFolder, $zipFileName)
-{
-    # Version 1.1
-    $privAbsolutePathToSourceFolder = "$absolutePathToSourceFolder"
-    $privZipFileName = "$zipFileName"
-
-    $privMessagePrefix = "$($MyInvocation.InvocationName) :"
-    multi-PurposeLogging -message "$privMessagePrefix Function invoked. Parameter privZipFileName has value >$privZipFileName< and privAbsolutePathToSourceFolder >$privAbsolutePathToSourceFolder<." -level "verbose"
-    
-    $errorOccured=$false
-
-    ### checking if the sourcefolder is there.
-    if ($privAbsolutePathToSourceFolder -eq "")
-    {
-        multi-PurposeLogging -message "$privMessagePrefix error. Parameter privAbsolutePathToSourceFolder is empty string." -level "error"
-        $errorOccured = $true
-    }
-    else
-    {
-        ### Checking if the folder is existent
-        if ( ! (get-item -Path "$privAbsolutePathToSourceFolder" -ErrorAction SilentlyContinue) )
-        {
-            multi-PurposeLogging -message "$privMessagePrefix could not find folder >$privAbsolutePathToSourceFolder<." -level "error"
-            $errorOccured = $true
-        }
-        else
-        {
-            ### Checking if there is content in the folder
-            if ( $(Get-ChildItem -Path "$privAbsolutePathToSourceFolder") -eq $null)
-            {
-                multi-PurposeLogging -message "$privMessagePrefix no child items (files / folders) in >$privAbsolutePathToSourceFolder<." -level "warning"
-            }
-        }
-    }
-    ### Checking if we have a filename provided
-    if ( $privZipFileName -eq "")
-    {
-        multi-PurposeLogging -message "$privMessagePrefix no zip filename provided. Using folder name instead." -level "warning"
-        $privZipFileName = "$((get-item -Path "$privAbsolutePathToSourceFolder" -ErrorAction SilentlyContinue).BaseName)"".zip"
-    }
-    elseif ( ! ($privZipFileName.Substring($privZipFileName.Length -4, 4) -ieq ".zip" ) )
-    {
-        multi-PurposeLogging -message "$privMessagePrefix no zip extension provided. Adding >.zip< to file name." -level "warning"
-        $privZipFileName="$privZipFileName.zip"
-    }
-
-    ### The Doing
-    if ($errorOccured -eq $false)
-    {
-        $parentDirectory = $null
-        $parentDirectory = "$((Get-Item -Path "$privAbsolutePathToSourceFolder").parent.FullName)\"
-
-        $absolutePathToZipFile=$null
-        $absolutePathToZipFile="$parentDirectory$privZipFileName"
-
-        ### Checking if the destination file is already there.
-        if (Get-Item -Path "$absolutePathToZipFile" -ErrorAction SilentlyContinue)
-        {
-            multi-PurposeLogging -message "$privMessagePrefix zip file >$absolutePathToZipFile< already existent." -level "warning"
-            $basename=(Get-Item -Path "$absolutePathToZipFile" -ErrorAction SilentlyContinue).BaseName
-            $newname="$basename"+"__$(get-NiceTimeStamp).zip"
-            multi-PurposeLogging -message "$privMessagePrefix renaming file to >$newname<." -level "information"
-            
-            $result=rename-Item -Path "$absolutePathToZipFile" "$newname" -Force -Confirm:$false
-            if ( $? -eq $true )
-            {
-                multi-PurposeLogging -message "$privMessagePrefix success." -level "success"
-            }
-            else
-            {
-                multi-PurposeLogging -message "$privMessagePrefix failed." -level "error"
-                $errorOccured = $true
-            }
-        }
-
-        ### Zipping the folder content
-        multi-PurposeLogging -message "$privMessagePrefix zipping folder content of >$privAbsolutePathToSourceFolder< to >$absolutePathToZipFile<." -level "information"
-        Add-Type -Assembly System.IO.Compression.FileSystem
-        ### The error is only caught through a try-catch
-        try
-        {
-            $compressionLevel = [System.IO.Compression.CompressionLevel]::Optimal
-            [System.IO.Compression.ZipFile]::CreateFromDirectory($privAbsolutePathToSourceFolder, $absolutePathToZipFile, $compressionLevel, $false)
-
-            if (Get-Item -Path "$absolutePathToZipFile" -ErrorAction SilentlyContinue)
-            {
-                multi-PurposeLogging -message "$privMessagePrefix success." -level "success"
-            }
-            else
-            {
-                multi-PurposeLogging -message "$privMessagePrefix failed." -level "error"
-                $errorOccured = $true
-            }
-        }
-        catch
-        {
-            multi-PurposeLogging -message "$privMessagePrefix failed." -level "error"
-            $errorOccured = $true            
-        }
-    }
-
-    ### Return value of the function
-    if ($errorOccured -eq $false)
-    {
-        multi-PurposeLogging -message "$privMessagePrefix returns the path to the zip-file >$absolutePathToZipFile<." -level "success"
-        return $absolutePathToZipFile
-    }
-    else
-    {
-        multi-PurposeLogging -message "$privMessagePrefix returns >false<." -level "error"
-        return $false
-    }
-}
-
-###################################################################################################################################
-##### SCRIPT MAIN
 #### VARIABLES
 ## Script
 $quickeditProtection                    = $true
@@ -4916,3 +4864,5 @@ if ($stage5completed -eq $true)
 ##### CLOSE DOWN
 ### STAGE N - END OF SCRIPT
 stage-n
+
+#endregion
