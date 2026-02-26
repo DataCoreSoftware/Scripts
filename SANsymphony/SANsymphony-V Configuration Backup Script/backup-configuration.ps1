@@ -2277,7 +2277,7 @@ function create-SSY-V-Configuration-Backup($backupPath, $temporaryFolder)
                     ## Analysis
                     if ( -not ( "$thisServersRootBackupFolder" -eq "" ) )
                     {
-                        if ( "$thisServersRootBackupFolder" -ieq "$privbackupPath" )
+                        if (($thisServersRootBackupFolder.TrimEnd('\','/')) -ieq ($privbackupPath.TrimEnd('\','/')))
                         {
                             $thisServerLocalBackupRootFolder = $privbackupPath
                             multi-PurposeLogging -message "$privMessagePrefix          local backup path for server >$($($dcsserver.hostname).split('.')[0])< >$thisServersRootBackupFolder< does match backup path >$privbackupPath<. Will use >$privbackupPath<." -level "verbose"
