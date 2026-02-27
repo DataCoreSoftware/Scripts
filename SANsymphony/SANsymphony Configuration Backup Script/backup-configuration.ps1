@@ -25,6 +25,7 @@
 # Changelog
 #
 # Version 1.0.22 - Refactored script to organize methods by responsibility.
+#                  Removed Checksum validation
 #
 # Version 1.0.21 - Adjusted script to honor "windowstyle hidden" option on restart.
 #
@@ -143,10 +144,6 @@ Param(
     [Parameter(ParameterSetName="Default", Mandatory = $false, HelpMessage="Should the script installation ignore different parameters? Usually the installscript does also force an update of the parameters but this may be needed in automatisms.")]
 	[boolean]
 	$installScriptIgnoreDifferentActionParameters = $false,
-
-    [Parameter(ParameterSetName="Default", Mandatory = $false, HelpMessage="Should the result of the script checksum check be ignored?")]
-	[boolean]
-	$ignoreScriptChecksum = $false,
 
     [Parameter(ParameterSetName="Default", Mandatory = $false, HelpMessage="Which local folder should be used to store the backup-files locally and within SSY-V Servergroup?")]
 	[string]
@@ -755,49 +752,6 @@ function create-Folder($absolutePath)
     else
     {
         return $false
-    }
-}
-#----------------------------------------------------------------------------------------------------------------------------------
-function sha512hash($absolutePath,$silent)
-{
-    # Version 1.3
-    $privAbsolutePath = "$absolutePath"
-    $privSilent = $silent
-
-    $privMessagePrefix = "$($MyInvocation.InvocationName) :"
-    if ($privSilent -ne $true)
-    {
-        $privSilent = $false
-        multi-PurposeLogging -message "$privMessagePrefix Function invoked. Parameter privAbsolutePath has value >$privAbsolutePath<, privSilent has value >$privSilent<)." -level "verbose"
-    }
-    
-    ### parameter checking
-    if ($privAbsolutePath -eq "" -or $privAbsolutePath -eq $null)
-    {
-        multi-PurposeLogging -message "$privMessagePrefix no path provided." -level "error"
-        return $false
-    }
-
-    ### checking if the file is there.
-    $fullPath = Resolve-Path $absolutePath
-    if (Test-Path -path "$fullPath" -ErrorAction SilentlyContinue)
-    {
-        ### getting the hash
-        $hashProvider = new-object -TypeName System.Security.Cryptography.SHA512CryptoServiceProvider
-        $fileToHash = [System.IO.File]::Open($fullPath,[System.IO.Filemode]::Open, [System.IO.FileAccess]::Read)
-        $hashResult=[System.BitConverter]::ToString($hashProvider.ComputeHash($fileToHash))
-        multi-PurposeLogging -message "$privMessagePrefix     file >$fullpath< has hash >$hashResult<." -level "verbose"
-        $fileToHash.Dispose()
-        if ($privSilent -ne $true)
-        {
-            multi-PurposeLogging -message "$privMessagePrefix returns the file hash." -level "success"
-        }
-        return $hashResult
-    }
-    else
-    {
-        multi-PurposeLogging -message "$privMessagePrefix there is no item in path provided." -level "error"
-        return $false        
     }
 }
 #----------------------------------------------------------------------------------------------------------------------------------
@@ -3615,35 +3569,6 @@ function stage-1($powershellProfileHandling,$ssyvCmdletLoadEnforced,$quickeditPr
     $stage1error = $false
     $privMessagePrefix = "$($MyInvocation.InvocationName) :"
     multi-PurposeLogging -message "$privMessagePrefix invoked with parameters privPowershellProfileHandling >$privPowershellProfileHandling<, privSsyvCmdletLoadEnforced >$privSsyvCmdletLoadEnforced<, privCheckAutorunPs1Script >$privCheckAutorunPs1Script<, privQuickeditProtection >$privQuickeditProtection<, privLoadConfigurationXML >$privLoadConfigurationXML<, privServerHardwareConfigurationXMLFileName >$privServerHardwareConfigurationXMLFileName<, privServerDeploymentConfigurationXMLFileName >$privServerDeploymentConfigurationXMLFileName<, privExpectedScriptFolder >$privExpectedScriptFolder<, privValidateUsercontext >$privValidateUsercontext<." -level "verbose"
-
-    # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-    ##### CHECKSUM CHECK
-    ### We validate the checksum of the script
-    $currentScriptChecksum = sha512hash -absolutePath "$globalMyScriptFolderPath$globalMyScriptName.ps1"
-    multi-PurposeLogging -message "$privMessagePrefix Main script calculated checksum is: >$currentScriptChecksum<." -level "verbose"
-    $compareScriptChecksum = $null
-    if ( test-path -path "$globalMyScriptFolderPath\$globalMyScriptName.ps1.sha512" )
-    {
-        $compareScriptChecksum = ([string](Get-Content -Path "$globalMyScriptFolderPath\$globalMyScriptName.ps1.sha512" -force -ErrorAction SilentlyContinue)).replace("`n|`r","").trim()
-    }
-    multi-PurposeLogging -message "$privMessagePrefix Main script compare checksum is:    >$compareScriptChecksum<." -level "verbose"
-    #If it is equal everything is fine
-    if ( "$currentScriptChecksum" -eq "$compareScriptChecksum" )
-    {
-        multi-PurposeLogging -message "$privMessagePrefix Checksum for >$globalMyScriptName< validated." -level "success"
-    }
-    else
-    {
-        multi-PurposeLogging -message "$privMessagePrefix someone tampered the script >$globalMyScriptName<." -level "error"
-        if ( $ignoreScriptChecksum -eq $false )
-        {
-            $stage1error = $true
-        }
-        else
-        {
-            multi-PurposeLogging -message "$privMessagePrefix ignoring checksum error due to >ignoreScriptChecksum< variable." -level "error"
-        }
-    }
 
     # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
     ##### LOGGING THE LIBRARY LOAD STATUS
