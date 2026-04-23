@@ -1,0 +1,12 @@
+{
+    "os": "windows-server-2019",
+    "osKey": "WS2019",
+    "displayName": "DataCore Profile for Windows Server 2019",
+    "profileId": "DCS-WS2019",
+    "listsFolder": "lists",
+    "configs": [
+        "finding_list_datacore_msft_security_baseline_windows_server_2025_2506_member_machine.csv",
+        "finding_list_datacore_cis_microsoft_windows_server_2019_1809_3.0.0_member_machine.csv",
+        "finding_list_datacore_cis_microsoft_windows_server_2019_1809_3.0.0_user.csv"
+    ]
+}

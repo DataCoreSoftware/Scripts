@@ -1,0 +1,11 @@
+{
+    "os": "windows-server-2016",
+    "osKey": "WS2016",
+    "displayName": "DataCore Profile for Windows Server 2016",
+    "profileId": "DCS-WS2016",
+    "listsFolder": "lists",
+    "configs": [
+        "finding_list_datacore_cis_microsoft_windows_server_2016_1607_3.0.0_member_machine.csv",
+        "finding_list_datacore_cis_microsoft_windows_server_2016_1607_3.0.0_user.csv"
+    ]
+}

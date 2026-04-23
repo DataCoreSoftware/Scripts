@@ -1,0 +1,12 @@
+{
+    "os": "windows-server-2025",
+    "osKey": "WS2025",
+    "displayName": "DataCore Profile for Windows Server 2025",
+    "profileId": "DCS-WS2025",
+    "listsFolder": "lists",
+    "configs": [
+        "finding_list_datacore_msft_security_baseline_windows_server_2025_2506_member_machine.csv",
+        "finding_list_datacore_cis_microsoft_windows_server_2025_24h2_1.0.0_member_machine.csv",
+        "finding_list_datacore_cis_microsoft_windows_server_2025_24h2_1.0.0_user.csv"
+    ]
+}

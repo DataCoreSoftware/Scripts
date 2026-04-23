@@ -1,0 +1,12 @@
+{
+    "os": "windows-server-2022",
+    "osKey": "WS2022",
+    "displayName": "DataCore Profile for Windows Server 2022",
+    "profileId": "DCS-WS2022",
+    "listsFolder": "lists",
+    "configs": [
+        "finding_list_datacore_msft_security_baseline_windows_server_2022_21h2_member_machine.csv",
+        "finding_list_datacore_cis_microsoft_windows_server_2022_21h2_1.0.0_machine.csv",
+        "finding_list_datacore_cis_microsoft_windows_server_2022_21h2_1.0.0_user.csv"
+    ]
+}

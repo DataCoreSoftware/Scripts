@@ -1,0 +1,8 @@
+{
+  "hardeningKitty": {
+    "version": "0.9.0",
+    "tagFormat": "v.{version}",
+    "github": { "owner": "scipag", "repo": "HardeningKitty" },
+    "http": { "userAgent": "DataCore-Hardening", "timeoutSeconds": 60 }
+  }
+}
