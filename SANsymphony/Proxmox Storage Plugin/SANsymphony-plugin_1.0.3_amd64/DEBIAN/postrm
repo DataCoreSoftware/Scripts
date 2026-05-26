@@ -1,0 +1,19 @@
+#!/bin/sh
+
+set -e
+
+#DEBHELPER#
+
+case "$1" in
+	remove|abort-install|disappear)
+        echo "Reloading the necessary Proxmox daemon services…"
+
+		deb-systemd-invoke reload-or-try-restart pvedaemon.service || true
+		deb-systemd-invoke reload-or-try-restart pveproxy.service || true
+		deb-systemd-invoke reload-or-try-restart pvestatd.service || true
+		deb-systemd-invoke reload-or-try-restart pve-ha-lrm.service || true
+		;;
+
+	*)
+		;;
+esac
