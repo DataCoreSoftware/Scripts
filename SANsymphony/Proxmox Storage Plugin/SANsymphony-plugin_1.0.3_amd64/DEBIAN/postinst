@@ -1,0 +1,78 @@
+#!/bin/bash
+
+set -e
+
+#DEBHELPER#
+
+case "$1" in
+	configure)
+
+        STORAGE_CFG="/etc/pve/storage.cfg"
+        PRIV_DIR="/etc/pve/priv/storage"
+
+        if [ -f "$STORAGE_CFG" ]; then
+            current_storeid=""
+            found_any_password=0
+
+            while IFS= read -r line; do
+                if [[ "$line" =~ ^[^[:space:]#] ]]; then
+                    current_storeid=""
+                fi
+
+                if [[ "$line" =~ ^ssy:[[:space:]]*([^[:space:]]+) ]]; then
+                    current_storeid="${BASH_REMATCH[1]}"
+                fi
+
+                if [[ -n "$current_storeid" && \
+                      "$line" =~ ^[[:space:]]+SSYpassword[[:space:]]+([^[:space:]]+) ]]; then
+
+                    plaintext="${BASH_REMATCH[1]}"
+                    encoded=$(printf '%s' "$plaintext" | base64 -w 0)
+                    mkdir -p "$PRIV_DIR"
+
+                    pw_file="$PRIV_DIR/${current_storeid}.pw"
+
+                    printf '%s\n' "$encoded" > "$pw_file"
+                    chmod 0600 "$pw_file"
+
+                    echo "Migrated SSYpassword for storage '${current_storeid}' to ${pw_file}."
+                    found_any_password=1
+                fi
+
+            done < "$STORAGE_CFG"
+
+            if [ "$found_any_password" -eq 1 ]; then
+                sed -i '/^[[:space:]]*SSYpassword[[:space:]]/d' "$STORAGE_CFG"
+                echo "Removed all SSYpassword lines from ${STORAGE_CFG}."
+            fi
+        fi
+
+        # applying datacore recommended iSCSI configuration settings.
+        /usr/bin/ssy-configure-iscsid apply
+
+        # Reload udev rules
+        if command -v udevadm >/dev/null; then
+            echo "Reloading udev rules..."
+            udevadm control --reload-rules
+            udevadm trigger --subsystem-match=block
+        fi
+
+        # Reload multipath maps
+        if command -v multipath >/dev/null; then
+            echo "Reloading the multipath configuration..."
+            multipath -r
+        fi
+
+        # Reload or restart Proxmox services to apply changes, ignoring failures
+        echo "Reloading the necessary Proxmox daemon services…"
+
+        deb-systemd-invoke reload-or-try-restart pvedaemon.service || true
+		deb-systemd-invoke reload-or-try-restart pveproxy.service || true
+		deb-systemd-invoke reload-or-try-restart pvestatd.service || true
+		deb-systemd-invoke reload-or-try-restart pvescheduler.service || true
+		deb-systemd-invoke reload-or-try-restart pve-ha-lrm.service || true
+		;;
+
+	*)
+		;;
+esac

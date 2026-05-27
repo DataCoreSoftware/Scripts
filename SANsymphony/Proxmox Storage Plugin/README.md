@@ -41,7 +41,7 @@ The plugin enables shared iSCSI storage managed by DataCore SANsymphony to be us
   - **Consistent State**: Shared LVM/iSCSI targets ensure all nodes have simultaneous, coordinated access to VM data.
 
 >[!IMPORTANT]
-> The SANsymphony Custom Storage Plugin 1.0.2 has been validated and tested with Proxmox VE versions **8** and **9.1.1**. If you upgrade or install Proxmox VE to a version higher than **9.1.1**, you may see the following warning message: "**PVE::Storage::Custom::SANsymphonyPlugin is implementing an older storage API; an upgrade is recommended**". This warning is informational and does not typically impact the functionality of the plugin.
+> The SANsymphony Custom Storage Plugin 1.0.3 has been validated and tested with Proxmox VE versions **8** and **9.1.1**. If you upgrade or install Proxmox VE to a version higher than **9.1.1**, you may see the following warning message: "**PVE::Storage::Custom::SANsymphonyPlugin is implementing an older storage API; an upgrade is recommended**". This warning is informational and does not typically impact the functionality of the plugin.
 
 <br/>
 
@@ -89,12 +89,12 @@ apt install ssy-plugin
 
 ### 1. Download the package
 ```bash
-wget https://github.com/DataCoreSoftware/Scripts/releases/download/SSY_PVE_Plugin/SANsymphony-plugin_1.0.2_amd64.deb
+wget https://github.com/DataCoreSoftware/Scripts/releases/download/SSY_PVE_Plugin/SANsymphony-plugin_1.0.3_amd64.deb
 ```
 
 ### 2. Install it
 ```bash
-dpkg -i SANsymphony-plugin_1.0.2_amd64.deb
+dpkg -i SANsymphony-plugin_1.0.3_amd64.deb
 ```
 
 ## 🛠️ Proxmox Configuration Updates Performed After Plugin Installation
@@ -333,7 +333,6 @@ pvesm add ssy <SSY Storage Class Name> \
 ssy: <SSY Storage Class Name>
    SSYipAddress <SSY Management IP Address list>
    SSYusername <SSY Username>
-   SSYpassword <SSY Password>
    portals <SSY FrontEnd iSCSI portals list>
    targets <SSY FrontEnd iSCSI Target IQN list>
    vdTemplateName <SSY Virtual Disk Template Name>
@@ -347,7 +346,7 @@ ssy: <SSY Storage Class Name>
 | storage_id     | The storage identifier (name under which it will appear in the Proxmox Storage list).                                                                                      |
 | SSYipAddress   | One or more comma-separated SANsymphony management IP addresses. Ensure Proxmox nodes can reach these IPs.                                                                 |
 | SSYusername    | The username used to authenticate with the SANsymphony REST API.                                                                                                           |
-| SSYpassword    | The password used to authenticate with the SANsymphony REST API.                                                                                                           |
+| SSYpassword    | The password used to authenticate with the SANsymphony REST API. It is saved in a file readable only by the root user(`/etc/pve/priv/storage/<Storage-Name>.pw`).          |
 | portals        | One or more iSCSI FE portal IP addresses, comma-separated. These are used for initiator connections.                                                                       |
 | targets        | One or more iSCSI target IQNs (Initiator Qualified Names), comma-separated.                                                                                                |
 | vdTemplateName | The name of the Virtual Disk Template to use for provisioning disks from DataCore. This template must already exist in SANsymphony.                                        |
@@ -360,7 +359,6 @@ ssy: <SSY Storage Class Name>
 ssy: Storage-Name
    SSYipAddress 10.15.1.19,10.15.1.18
    SSYusername administrator
-   SSYpassword Password
    portals 10.15.1.17,10.151.1.16
    targets iqn.2000-08.com.datacore:ssy1-1,iqn.2000-08.com.datacore:ssy2-1
    vdTemplateName SSY-VDT
@@ -368,6 +366,9 @@ ssy: Storage-Name
    shared 1
    disable 0
 ```
+
+>[!NOTE]
+>The SSYpassword is stored in the location `/etc/pve/priv/storage/<Storage-Name>.pw`.
 
 <br/>
 

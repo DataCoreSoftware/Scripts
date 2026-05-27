@@ -8,18 +8,7 @@ use HTTP::Request;
 use PVE::Tools qw(run_command file_read_firstline trim dir_glob_regex dir_glob_foreach $IPV4RE $IPV6RE);
 use PVE::Storage::ISCSIPlugin;
 use base qw(PVE::Storage::Plugin);
-
-# Example: 192.168.122.252:3260,1 iqn.2003-01.org.linux-iscsi.proxmox-nfs.x8664:sn.00567885ba8f
-my $ISCSI_TARGET_RE = qr/^((?:$IPV4RE|\[$IPV6RE\]):\d+)\,\S+\s+(\S+)\s*$/;
-my $rescan_filename = "/var/run/ssy-iscsi-rescan.lock";
-my $vd_id;
-my $DEBUG = 1;
-my $default_protocol = 'iscsi';
-
-my $ISCSIADM = '/usr/bin/iscsiadm';
-my $found_iscsi_adm_exe;
-my $NVME = '/usr/sbin/nvme';
-my $found_nvme_exe;
+use MIME::Base64 qw(encode_base64 decode_base64);
 
 sub api {
     my $minver = 3;
@@ -62,6 +51,7 @@ sub type {
 sub plugindata {
     return {
         content => [ {images => 1, none => 1}, { images => 1 }],
+        'sensitive-properties' => { SSYpassword => 1 },
     };
 }
 
@@ -72,11 +62,11 @@ sub properties {
 		    type => 'string',
 		},
 		portals => {
-		    description => "comma separated iSCSI/NVMe portals (IP or DNS name with optional port).",
+		    description => "comma separated iSCSI portals (IP or DNS name with optional port).",
 		    type => 'string',
 		},
 		targets => {
-		    description => "comma separated iSCSI/NVMe targets",
+		    description => "comma separated iSCSI targets",
 		    type => 'string',
 		},
         SSYusername => {
@@ -91,11 +81,6 @@ sub properties {
 		    description => "Name of the VD Template to be used",
 		    type => 'string',
 		},
-        protocol => {
-        description => "Set storage protocol ( iscsi | nvme )",
-        type        => 'string',
-        default     => $default_protocol
-        },
     };
 }
 
@@ -104,15 +89,102 @@ sub options {
         portals => { fixed => 1 },
         targets => { fixed => 1 },
         SSYusername => { fixed => 1},
-        SSYpassword => { fixed => 1},
+        SSYpassword => { fixed => 1, optional => 1 },
         SSYipAddress => { fixed => 1},
         vdTemplateName => { fixed => 1 },
         nodes => { optional => 1},
         shared => { optional => 1 },
         disable => { optional => 1},
         content => { optional => 1},
-        protocol  => { optional => 1 },
     };
+}
+
+# Example: 192.168.122.252:3260,1 iqn.2003-01.org.linux-iscsi.proxmox-nfs.x8664:sn.00567885ba8f
+my $ISCSI_TARGET_RE = qr/^((?:$IPV4RE|\[$IPV6RE\]):\d+)\,\S+\s+(\S+)\s*$/;
+my $rescan_filename = "/var/run/ssy-iscsi-rescan.lock";
+my $ISCSIADM = '/usr/bin/iscsiadm';
+my $found_iscsi_adm_exe;
+my $vd_id;
+my $debug = 1;
+
+sub encode_password {
+    my ($password) = @_;
+    return encode_base64("$password", '');
+}
+
+sub decode_password {
+    my ($encoded) = @_;
+    my $password = decode_base64($encoded);
+    return $password;
+}
+
+sub ssy_pass_file_name {
+    my ($storeid) = @_;
+
+    return "/etc/pve/priv/storage/${storeid}.pw";
+}
+
+sub ssy_set_pass {
+    my ($pass, $storeid) = @_;
+
+    my $pwfile = ssy_pass_file_name($storeid);
+    mkdir "/etc/pve/priv/storage";
+
+    PVE::Tools::file_set_contents($pwfile, "$pass\n", 0600, 1);
+}
+
+sub ssy_delete_pass {
+    my ($storeid) = @_;
+
+    my $pwfile = ssy_pass_file_name($storeid);
+
+    unlink $pwfile;
+}
+
+sub ssy_get_pass {
+    my ($storeid) = @_;
+
+    my $pwfile = ssy_pass_file_name($storeid);
+
+    my $contents = PVE::Tools::file_read_firstline($pwfile);
+
+    return eval { decode('UTF-8', $contents, 1) } // $contents;
+}
+
+sub on_add_hook {
+    my ($class, $storeid, $scfg, %sensitive) = @_;
+
+    if (defined($sensitive{SSYpassword})) {
+        my $pass = encode_password($sensitive{SSYpassword});
+        ssy_set_pass($pass, $storeid);
+    } else {
+        ssy_delete_pass($storeid);
+    }
+
+    return;
+}
+
+sub on_update_hook {
+    my ($class, $storeid, $scfg, %sensitive) = @_;
+
+    return if !(exists($sensitive{SSYpassword}));
+
+    if (defined($sensitive{SSYpassword})) {
+        my $pass = encode_password($sensitive{SSYpassword});
+        ssy_set_pass($pass, $storeid);
+    } else {
+        ssy_delete_pass($storeid);
+    }
+
+    return;
+}
+
+sub on_delete_hook {
+    my ($class, $storeid, $scfg) = @_;
+
+    ssy_delete_pass($storeid);
+
+    return;
 }
 
 my sub assert_iscsi_support {
@@ -123,26 +195,8 @@ my sub assert_iscsi_support {
 
     if (!$found_iscsi_adm_exe) {
         die "error: no iscsi support - please install open-iscsi\n" if !$noerr;
-        warn "warning: no iscsi support - please install open-iscsi\n";
     }
     return $found_iscsi_adm_exe;
-}
-
-sub assert_nvme_support {
-    my ($noerr) = @_;
-    print "Debug :: PVE::Storage::Custom::SANsymphonyPlugin::sub::assert_nvme_support\n" if $DEBUG;
-
-    return $found_nvme_exe if $found_nvme_exe;
-    # return $found_iscsi_adm_exe if $found_iscsi_adm_exe; # assume it won't be removed if ever found 
-
-    $found_nvme_exe = -x $NVME;
-
-    if (!$found_nvme_exe) {
-        die "error: no nvme support - please install nvme-cli\n" if !$noerr;
-        warn "warning: no nvme support - please install nvme-cli\n";
-    }
-
-    return $found_nvme_exe;
 }
 
 sub status {
@@ -302,33 +356,6 @@ sub iscsi_session {
 sub activate_storage {
     my ($class, $storeid, $scfg, $cache) = @_;
 
-    if ($scfg->{protocol} && $scfg->{protocol} eq 'nvme') {
-        activate_nvme_storage($storeid, $scfg, $cache);
-    }
-    else {
-        activate_iscsi_storage($storeid, $scfg, $cache);
-    }
-
-    ssy_register_host($scfg);
-
-    run_command(['multipath', '-r'], outfunc => sub {});
-
-    delete_stale_virtual_disks();
-}
-
-sub activate_nvme_storage {
-    my ($storeid, $scfg, $cache) = @_;
-    print "Debug :: PVE::Storage::Custom::SANsymphonyPlugin::sub::activate_nvme_storage\n" if $DEBUG;
-
-    return if !assert_nvme_support(1);
-
-    die "NVMe protocol support is not implemented yet\n";
-}
-
-sub activate_iscsi_storage {
-    my ($storeid, $scfg, $cache) = @_;
-    print "Debug :: PVE::Storage::Custom::SANsymphonyPlugin::sub::activate_iscsi_storage\n" if $DEBUG;
-    
     return if !assert_iscsi_support(1);
 
     my @ssy_session_list;
@@ -360,6 +387,12 @@ sub activate_iscsi_storage {
     }
 
     iscsi_session_rescan(0, @ssy_session_list) if scalar @ssy_session_list;
+
+    ssy_register_host($scfg, $storeid);
+
+    run_command(['multipath', '-r'], outfunc => sub {});
+
+    delete_stale_virtual_disks();
 }
 
 sub delete_stale_virtual_disks {
@@ -410,8 +443,8 @@ sub delete_stale_virtual_disks {
 
         return if $has_holders;  # Skip devices in use by dm/LVM/etc.
 
-        print "Stale device $dev_name detected (size=0, vendor='$vendor', model='$model', holders=None)\n" if $DEBUG;
-        print "Deleting stale device $dev_name\n" if $DEBUG;
+        print "Stale device $dev_name detected (size=0, vendor='$vendor', model='$model', holders=None)\n" if $debug;
+        print "Deleting stale device $dev_name\n" if $debug;
 
         run_command(["echo 1 > /sys/block/$dev_name/device/delete"], outfunc => sub {});
     });
@@ -544,13 +577,13 @@ sub alloc_image {
     my $volid;
     my $scsi_id = undef;
 
-    ($vd_id, $ScsiDeviceIdString) = ssy_vd_from_vdt($scfg, $size_GiB, $vmid, $name);
+    ($vd_id, $ScsiDeviceIdString) = ssy_vd_from_vdt($scfg, $storeid, $size_GiB, $vmid, $name);
 
-    my @host_ids = ssy_get_host_ids($scfg);
-    my $lun  = ssy_get_lun($scfg, $vd_id);
+    my @host_ids = ssy_get_host_ids($scfg, $storeid);
+    my $lun  = ssy_get_lun($scfg, $storeid, $vd_id);
 
     foreach my $host_id (@host_ids){
-        ssy_serve_vd($scfg, $host_id, $vd_id, $lun);
+        ssy_serve_vd($scfg, $storeid, $host_id, $vd_id, $lun);
     }
 
     my @ssy_targets = split(/\s*,\s*/, $scfg->{targets});
@@ -603,7 +636,7 @@ sub alloc_image {
     
     print "Unable to allocate the disk so deleteing the created disk.";
 
-    ssy_unserve_delete_vd($vd_id, $scfg, @host_ids);
+    ssy_unserve_delete_vd($vd_id, $scfg, $storeid, @host_ids);
 
     die "ERROR on image allocation";
 }
@@ -614,14 +647,14 @@ sub free_image {
 
     if ($volname =~ /\d+\.\d+\.\d+\.scsi-3(\w+):\d+$/) {
         my $wwid = $1;
-        $vd_id = ssy_get_vd_id_from_wwid($scfg, $wwid);
+        $vd_id = ssy_get_vd_id_from_wwid($scfg, $wwid, $storeid);
     }
 
     return undef if $vd_id eq 0 || undef;
 
-    my @host_ids = ssy_get_host_ids($scfg);
+    my @host_ids = ssy_get_host_ids($scfg, $storeid);
 
-    ssy_unserve_delete_vd($vd_id, $scfg, @host_ids);
+    ssy_unserve_delete_vd($vd_id, $scfg, $storeid, @host_ids);
 
     print "SANsymphony VD with ID $vd_id got unserved and deleted successfully\n";
 
@@ -629,7 +662,7 @@ sub free_image {
 }
 
 sub ssy_request {
-    my ($request, $scfg, $method, $endpoint, $body) = @_;
+    my ($request, $scfg, $storeid, $method, $endpoint, $body) = @_;
 
     if ($request ne "GET HOSTs") {
         print "Calling the SANsymphony REST API: $request\n";
@@ -638,19 +671,27 @@ sub ssy_request {
     my @ssy_portals = split(/\s*,\s*/, $scfg->{SSYipAddress});
 
     foreach my $portal (@ssy_portals) {
-        my $url = "http://$portal/RestService/rest.svc/$endpoint";
-        my $ua = LWP::UserAgent->new;
+        my $url = "https://$portal/RestService/rest.svc/$endpoint";
+        my $ua = LWP::UserAgent->new(
+            ssl_opts => {
+                verify_hostname => 0,
+                SSL_verify_mode => 0x00,
+            }
+        );
         my $req = HTTP::Request->new($method => $url);
 
         $req->header('Content-Type' => 'application/json');
         $req->header('ServerHost' => $portal);
-        $req->authorization_basic( $scfg->{SSYusername}, $scfg->{SSYpassword} );
+
+        my $encoded_pass = ssy_get_pass($storeid);
+        my $password = decode_password($encoded_pass);
+        $req->authorization_basic( $scfg->{SSYusername}, $password);
 
         if ($body) {
             $req->content(encode_json($body));
         }
 
-        next if (!PVE::Network::tcp_ping($portal, 80, 2));
+        next if (!PVE::Network::tcp_ping($portal, 443, 2));
 
         my $res = $ua->request($req);
         if ($res->is_success) {
@@ -668,16 +709,16 @@ sub ssy_request {
 }
 
 sub ssy_get_vds {
-    my ($scfg) = @_;
+    my ($scfg, $storeid) = @_;
 
-    my $vds = ssy_request('GET Virtual Disks', $scfg, "GET", "1.0/virtualdisks" );
+    my $vds = ssy_request('GET Virtual Disks', $scfg, $storeid, "GET", "1.0/virtualdisks" );
     return $vds;
 }
 
 sub ssy_get_vdt_info {
-    my ($scfg) = @_;
+    my ($scfg, $storeid) = @_;
 
-    my $data = ssy_request('GET VD Templates', $scfg, "GET", "/1.0/virtualdisktemplates" );
+    my $data = ssy_request('GET VD Templates', $scfg, $storeid, "GET", "/1.0/virtualdisktemplates" );
 
     foreach my $vdt (@$data){
         if ($vdt->{Caption} eq $scfg->{vdTemplateName}) {
@@ -688,9 +729,9 @@ sub ssy_get_vdt_info {
 }
 
 sub ssy_get_vd_id_from_wwid {
-    my ($scfg, $wwid) = @_;
+    my ($scfg, $wwid, $storeid) = @_;
 
-    my $vds = ssy_get_vds($scfg);
+    my $vds = ssy_get_vds($scfg, $storeid);
 
     foreach my $virtualdisk (@$vds){
         if (lc($virtualdisk->{ScsiDeviceIdString}) eq lc($wwid)) {
@@ -702,7 +743,7 @@ sub ssy_get_vd_id_from_wwid {
 }
 
 sub ssy_register_host {
-    my ($scfg, $host_name, $iscsi_initiatorname) = @_;
+    my ($scfg, $storeid, $host_name, $iscsi_initiatorname) = @_;
     
     run_command(['hostname'], errmsg => 'Getting the host name', outfunc => sub {
         $host_name = shift;
@@ -714,27 +755,27 @@ sub ssy_register_host {
         $iscsi_initiatorname = shift;
     });
 
-    my $ssy_hosts = ssy_get_hosts($scfg);
+    my $ssy_hosts = ssy_get_hosts($scfg, $storeid);
     foreach my $host (@$ssy_hosts) {
         if ($host->{Caption} eq $host_name) {
             if ($host->{State} ne 0){
                 return;
             } else {
-                ssy_assign_port_to_host($scfg, $iscsi_initiatorname, $host->{Id});
+                ssy_assign_port_to_host($scfg, $storeid, $iscsi_initiatorname, $host->{Id});
                 return;
             }
         }
     }
 
-    my $host_id = ssy_add_host($scfg, $host_name);
+    my $host_id = ssy_add_host($scfg, $storeid, $host_name);
 
-    ssy_assign_port_to_host($scfg, $iscsi_initiatorname, $host_id);
+    ssy_assign_port_to_host($scfg, $storeid, $iscsi_initiatorname, $host_id);
 }
 
 sub ssy_add_host {
-    my ($scfg, $host_name) = @_;
+    my ($scfg, $storeid, $host_name) = @_;
     
-    my $data = ssy_request('ADD HOST', $scfg, 'POST', '1.0/hosts', {
+    my $data = ssy_request('ADD HOST', $scfg, $storeid, 'POST', '1.0/hosts', {
         Name => $host_name,
         Description => "This host is beeing added by proxmox storage plugin",
         OperatingSystem => 7,
@@ -747,28 +788,27 @@ sub ssy_add_host {
 }
 
 sub ssy_assign_port_to_host {
-    my ($scfg, $port, $host_id) = @_;
+    my ($scfg, $storeid, $port, $host_id) = @_;
     
-    ssy_request('ASSIGN PORT', $scfg, 'POST', "1.0/hosts/$host_id", {
+    ssy_request('ASSIGN PORT', $scfg, $storeid, 'POST', "1.0/hosts/$host_id", {
         Operation => "AssignPort",
         Port => $port
     });
 }
 
 sub ssy_get_hosts {
-    my ($scfg) = @_;
+    my ($scfg, $storeid) = @_;
 
-    my $ssy_hosts = ssy_request('GET HOSTs', $scfg, "GET", "1.0/hosts" );
+    my $ssy_hosts = ssy_request('GET HOSTs', $scfg, $storeid, "GET", "1.0/hosts" );
 
     return $ssy_hosts;
 }
 
 sub ssy_get_host_ids {
-    my ($scfg) = @_;
+    my ($scfg, $storeid) = @_;
     my @pve_hosts;
     my @hosts = ();
-    my $ssy_hosts = ssy_get_hosts($scfg);
-
+    my $ssy_hosts = ssy_get_hosts($scfg, $storeid);
 
     if ($scfg->{nodes}){
 	    my $nodes = PVE::Storage::Plugin->encode_value($scfg->{type}, 'nodes', $scfg->{nodes});
@@ -826,9 +866,9 @@ sub ssy_get_vmid {
 }
 
 sub ssy_vd_from_vdt {
-    my ($scfg, $size_GiB, $vmid, $name) = @_;
+    my ($scfg, $storeid, $size_GiB, $vmid, $name) = @_;
 
-    my ($vdt_id, $vdt_alias) = ssy_get_vdt_info($scfg);
+    my ($vdt_id, $vdt_alias) = ssy_get_vdt_info($scfg, $storeid);
 
     my $vd_name;
     if ($name) {
@@ -840,7 +880,7 @@ sub ssy_vd_from_vdt {
         $size_GiB = 1; # enforce minimum size of 1 GB
     }
 
-    my $vd = ssy_request('CREATE VD from VD Template', $scfg, 'POST', '1.0/virtualdisks', {
+    my $vd = ssy_request('CREATE VD from VD Template', $scfg, $storeid, 'POST', '1.0/virtualdisks', {
         VirtualDiskTemplate => $vdt_id,
         Name => $vd_name,
         Size => "$size_GiB GB",
@@ -859,9 +899,9 @@ sub ssy_vd_from_vdt {
 }
 
 sub ssy_serve_vd {
-    my ($scfg, $host_id, $vd_id, $lun) = @_;
+    my ($scfg, $storeid, $host_id, $vd_id, $lun) = @_;
 
-    ssy_request('SERVE VD', $scfg, 'POST', "1.0/virtualdisks/$vd_id", {
+    ssy_request('SERVE VD', $scfg, $storeid, 'POST', "1.0/virtualdisks/$vd_id", {
         Operation => 'Serve',
         Host => $host_id,
         Redundancy => 'true',
@@ -872,9 +912,9 @@ sub ssy_serve_vd {
 }
 
 sub ssy_get_lun {
-    my ($scfg, $vd_id) = @_;
+    my ($scfg, $storeid, $vd_id) = @_;
     
-    my $data = ssy_request('GET Virtual Logical Units', $scfg, 'GET', "1.0/virtuallogicalunits");
+    my $data = ssy_request('GET Virtual Logical Units', $scfg, $storeid, 'GET', "1.0/virtuallogicalunits");
 
     my @used_luns = ();
     foreach my $entry (@$data) {
@@ -893,7 +933,7 @@ sub ssy_get_lun {
 
     if ($lun >= 255) {
         # Deleting the VD as there are no free LUNs available
-        $data = ssy_request('DELETE VD', $scfg, 'DELETE', "1.0/virtualdisks/$vd_id");
+        $data = ssy_request('DELETE VD', $scfg, $storeid, 'DELETE', "1.0/virtualdisks/$vd_id");
 
         die "No free LUNs available for serving the new VD";
     }
@@ -902,17 +942,17 @@ sub ssy_get_lun {
 }
 
 sub ssy_unserve_delete_vd {
-    my ($vd_id, $scfg, @host_ids) = @_;
+    my ($vd_id, $scfg, $storeid, @host_ids) = @_;
     
     my $data;
     foreach my $host_id (@host_ids){
-        $data = ssy_request('UNSERVE VD', $scfg, 'POST', "1.0/virtualdisks/$vd_id", {
+        $data = ssy_request('UNSERVE VD', $scfg, $storeid, 'POST', "1.0/virtualdisks/$vd_id", {
             Operation => 'Unserve',
             Host => $host_id,
         });
     }
 
-    $data = ssy_request('DELETE VD', $scfg, 'DELETE', "1.0/virtualdisks/$vd_id");
+    $data = ssy_request('DELETE VD', $scfg, $storeid, 'DELETE', "1.0/virtualdisks/$vd_id");
 }
 
 sub load_stable_scsi_paths {
@@ -1126,10 +1166,10 @@ sub volume_resize {
 
     if ($volname =~ /\d+\.\d+\.\d+\.scsi-3(\w+):\d+$/) {
         my $wwid = $1;
-        $vd_id = ssy_get_vd_id_from_wwid($scfg, $wwid);
+        $vd_id = ssy_get_vd_id_from_wwid($scfg, $wwid, $storeid);
     }
 
-    ssy_request('Set Virtual Disk Properties', $scfg, 'PUT', "/1.0/virtualdisks/$vd_id", {
+    ssy_request('Set Virtual Disk Properties', $scfg, $storeid, 'PUT', "/1.0/virtualdisks/$vd_id", {
         Size => "$size_GiB GB"
     });
 
