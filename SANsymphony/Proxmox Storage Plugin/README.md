@@ -57,17 +57,7 @@ Before using the plugin, ensure the following:
   apt update
   apt install jq
   ```
-- If iSCSI protocol is being used
-  ```
-  apt install open-iscsi
-  apt install multipath-tools
-  ```
-- If NVMe/TCP protocol is being used
-  ```
-  apt install nvme-cli
-  modprobe nvme-tcp
-  ```
-
+  
 <br/>
 
 # 📦 Installation
