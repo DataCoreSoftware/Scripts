@@ -19,7 +19,7 @@ A Proxmox VE storage plugin to integrate [DataCore SANsymphony™](https://www.d
 <br/>
 
 References
-- [SANsymphony Storage Plugin for Proxmox](https://docs.datacore.com/SANsymphony-Storage-Plugin-for-Proxmox-WebHelp/Proxmox-Plugin/WebHelp/Overview.htm) – Complete Proxmox plugin configuration details.
+- [SANsymphony Storage Plugin for Proxmox Preview](https://docs.datacore.com/SANsymphony-Preview/Preview-SANsymphony-Storage-Plugin-for-Proxmox-WebHelp/Proxmox-Plugin/WebHelp/Overview.htm) – Complete Proxmox plugin Preview configuration details.
 - [Proxmox Host Configuration Guide](https://docs.datacore.com/SSV-WebHelp/SSV-WebHelp/FAQ/Host-Configuration-Guide/Proxmox_Configuration_Guide.htm) – Host setup, network configuration instructions and more.
 
 <br/>
