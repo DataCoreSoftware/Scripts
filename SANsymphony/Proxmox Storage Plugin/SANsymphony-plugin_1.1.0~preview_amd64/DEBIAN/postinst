@@ -47,9 +47,6 @@ case "$1" in
             fi
         fi
 
-        # applying datacore recommended iSCSI configuration settings.
-        /usr/bin/ssy-configure-iscsid apply
-
         # Reload udev rules
         if command -v udevadm >/dev/null; then
             echo "Reloading udev rules..."
