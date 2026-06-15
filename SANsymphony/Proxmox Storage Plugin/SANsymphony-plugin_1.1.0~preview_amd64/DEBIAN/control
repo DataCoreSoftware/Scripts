@@ -1,0 +1,9 @@
+Source: ssy-plugin
+Package: ssy-plugin
+Version: 1.1.0~preview
+Maintainer: Chiranth J S <chiranth.js@datacore.com>
+Architecture: amd64
+Depends: python3 (>= 3.6), jq
+Description: A proxmox storage plugin for DataCore SANsymphony.
+Section: utils
+Priority: optional

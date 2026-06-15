@@ -1,0 +1,16 @@
+#!/bin/bash
+set -e
+
+TMP_DIR="/var/backups/SANsymphony-Plugin-Backup"
+MULTIPATH_CONF="/etc/multipath.conf"
+
+echo "Creating ${TMP_DIR} folder to back up the configuration files..."
+mkdir -p "$TMP_DIR"
+
+# Take backup of multipath config
+if [[ -f "$MULTIPATH_CONF" ]]; then
+    echo "+ Copying ${MULTIPATH_CONF} to ${TMP_DIR}..."
+    cp "$MULTIPATH_CONF" "$TMP_DIR"
+else
+    echo "+ File ${MULTIPATH_CONF} does not exist, skipping backup..."
+fi
