@@ -35,36 +35,10 @@ def select_action():
         else:
             print(RED + "Invalid choice. Please select from 1 to 4." + NC)
 
-def select_protocol(provided_params):
-    """Return 'iscsi' or 'nvme-tcp'.  Honours --protocol CLI arg if supplied."""
-    if provided_params.get('protocol'):
-        proto = provided_params['protocol'].strip().lower()
-        if proto not in ('iscsi', 'nvme-tcp'):
-            print(RED + f"Invalid protocol '{proto}'. Must be 'iscsi' or 'nvme-tcp'." + NC)
-            exit(1)
-        return proto
-
-    print("\tSelect storage protocol:")
-    print("\t  1. iSCSI  (default)")
-    print("\t  2. NVMe/TCP")
-    while True:
-        choice = input(YELLOW + "\tEnter your choice [1-2] (default: 1): " + NC).strip() or "1"
-        if choice == "1":
-            return "iscsi"
-        elif choice == "2":
-            return "nvme-tcp"
-        else:
-            print(RED + "\tInvalid choice. Please select 1 or 2." + NC)
-
 def get_ssy_parameters(provided_params):
     input_params = {}
     value = None
-    SSYuser = None
-    SSYpass = None
-    portals = None
-    targets = None
-
-    _params = ['protocol', 'SSYipAddress', 'SSYcredentials', 'portals', 'vdTemplateName', 'SSYname', 'nodes', 'shared', 'disable']
+    _params = ['SSYipAddress', 'SSYcredentials', 'portals', 'vdTemplateName', 'SSYname', 'nodes', 'shared', 'disable']
 
     if provided_params.get('default') == '1' and not provided_params.get('portals'):
         provided_params['portals'] = "all"
@@ -72,13 +46,6 @@ def get_ssy_parameters(provided_params):
     for param in _params:
         if provided_params.get(param) is None:
             match param:
-                case 'protocol':
-                    if provided_params.get('default') == '1':
-                        value = "iscsi"
-                    else:
-                        value = select_protocol(provided_params)
-                        if debug:
-                            print(YELLOW + f"\tSelected protocol: {value}" + NC)
                 case 'SSYname':
                     value = input(f"\tEnter Storage name (default: {input_params['vdTemplateName']}): ") or input_params['vdTemplateName']
                 case 'SSYipAddress':
@@ -90,16 +57,9 @@ def get_ssy_parameters(provided_params):
                     else:
                         SSYuser, SSYpass = check_credentials(input_params['SSYipAddress'])
                 case 'vdTemplateName':
-                    value = select_vd_template(input_params['SSYipAddress'], SSYuser, SSYpass, input_params["protocol"])
+                    value = select_vd_template(input_params['SSYipAddress'], SSYuser, SSYpass)
                 case 'portals':
-                    if input_params['protocol'] == 'nvme-tcp':
-                        portals, targets = discover_nvme_portals(
-                            input_params['SSYipAddress'], SSYuser, SSYpass
-                        )
-                    else:
-                        portals, targets = discover_portals(
-                            input_params['SSYipAddress'], SSYuser, SSYpass
-                        )
+                    portals, targets = discover_portals(input_params['SSYipAddress'], SSYuser, SSYpass)
                 case 'nodes':
                     if provided_params.get('default') == '1':
                         value = "all"
@@ -129,18 +89,8 @@ def get_ssy_parameters(provided_params):
         else:
             input_params[param] = provided_params[param]
 
-    # If portals were passed via CLI, still run discovery so targets are resolved
     if provided_params.get('portals'):
-        if input_params['protocol'] == 'nvme-tcp':
-            portals, targets = discover_nvme_portals(
-                input_params['SSYipAddress'], SSYuser,
-                SSYpass, provided_params.get('portals')
-            )
-        else:
-            portals, targets = discover_portals(
-                input_params['SSYipAddress'], SSYuser,
-                SSYpass, provided_params.get('portals')
-            )
+        portals, targets = discover_portals(provided_params['SSYipAddress'], provided_params['SSYusername'], provided_params['SSYpassword'], provided_params.get('portals'))
 
     params = {
         'SSYname': input_params['SSYname'],
@@ -153,7 +103,6 @@ def get_ssy_parameters(provided_params):
         'nodes': input_params['nodes'],
         'shared': input_params['shared'],
         'disable': input_params['disable'],
-        'protocol': input_params['protocol'],        
         'default': provided_params.get('default')
     }
 
@@ -274,198 +223,9 @@ def discover_portals(SSYips, SSYuser, SSYpass, portals=None):
         print(RED + f"Error fetching SANsymphony FE portals from {SSYip}: {e}" + NC)
         exit(1)
 
-# ── NEW: NVMe/TCP portal/target discovery ─────────────────────────────────────
-def discover_nvme_portals(SSYips, SSYuser, SSYpass, portals=None):
-    """
-    Query the SANsymphony REST API for NVMe/TCP front-end portal IPs,
-    then run 'nvme discover' against each portal to retrieve the subsystem NQN.
-
-    Returns (portals_str, target_nqn_str)
-    """
-    SSYip = SSYips.split(",")[0].strip()
-
-    if portals is not None:
-        input_portal = portals
-    else:
-        input_portal = input(
-            "\tEnter the NVMe/TCP Front End portal IPs "
-            "(default: auto discover all NVMe FE portals): "
-        ) or "all"
-
-    try:
-        response = subprocess.run(
-            ["curl", "-s", "-m", "3", "-k", "-L",
-             "-H", f"ServerHost: {SSYip}",
-             "-u", f"{SSYuser}:{SSYpass}",
-             f"https://{SSYip}/RestService/rest.svc/1.0/ports?supportsNVMeTcpPorts=true"],
-            stdout=subprocess.PIPE
-        )
-
-        result = json.loads(response.stdout.decode())
-
-        # Collect front-end NVMe/TCP portal IPs only (Role == 1)
-        portal_ips = []
-        for port in result:
-            role = port.get("ServerPortProperties", {}).get("Role")
-            if role != 1:
-                continue
-
-            portal_configs = port.get("PortConfigInfo", {}).get("PortalsConfig", [])
-            if portal_configs:
-                for p in portal_configs:
-                    addr = p.get("Address", {}).get("Address")
-                    if addr and addr not in portal_ips:
-                        portal_ips.append(addr)
-            else:
-                addr = port.get("Address", {}).get("Address", "")
-                if addr and addr not in portal_ips:
-                    portal_ips.append(addr)
-
-        if not portal_ips:
-            print(RED + "\t\tNo NVMe/TCP front-end portals found on the SANsymphony server." + NC)
-            exit(1)
-
-        # Filter by user-supplied portal IPs (if any)
-        if input_portal and input_portal != "all":
-            selected = {p.strip() for p in input_portal.split(",")}
-            not_found = selected - set(portal_ips)
-            for p in not_found:
-                print(RED + f"\t\tWarning: NVMe portal '{p}' not discovered." + NC)
-            portal_ips = [p for p in portal_ips if p in selected]
-
-        if not portal_ips:
-            print(RED + "\t\tNo matching NVMe/TCP portals found." + NC)
-            exit(1)
-
-        # Run 'nvme discover' against each portal to retrieve the subsystem NQN
-        all_nqns = []
-        valid_portals = []
-
-        for portal in portal_ips:
-            if debug:
-                print(YELLOW + f"\t\tRunning nvme discover on portal {portal}..." + NC)
-            try:
-                nvme_result = subprocess.run(
-                    ["nvme", "discover", "--transport", "tcp",
-                     "--traddr", portal, "--trsvcid", "8009"],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True
-                )
-                output = nvme_result.stdout
-
-                # Extract subnqn lines from nvme discover output
-                # Output lines look like:  subnqn:   nqn.2014-08.org.nvmexpress:uuid:...
-                nqns_found = re.findall(r'subnqn:\s*(nqn\.\S+)', output)
-
-                # Filter out the discovery NQN itself
-                nqns_found = [n for n in nqns_found if "discovery" not in n.lower()]
-
-                if nqns_found:
-                    valid_portals.append(portal)
-                    for nqn in nqns_found:
-                        if nqn not in all_nqns:
-                            all_nqns.append(nqn)
-                    print(GREEN + f"\t\tDiscovered NVMe FE Portal: {portal} -> NQN: {nqns_found[0]}" + NC)
-                else:
-                    print(YELLOW + f"\t\tWarning: No subsystem NQN found via portal {portal}, skipping." + NC)
-
-            except FileNotFoundError:
-                print(RED + "\t\tError: 'nvme' CLI tool not found. Please install nvme-cli." + NC)
-                exit(1)
-            except Exception as e:
-                print(RED + f"\t\tError running nvme discover on {portal}: {e}" + NC)
-
-        if not valid_portals or not all_nqns:
-            print(RED + "\t\tFailed to discover any NVMe subsystem NQN from the portals." + NC)
-            exit(1)
-
-        if len(all_nqns) > 1:
-            print(YELLOW + f"\t\tWarning: Multiple NVMe NQNs discovered; using the first one: {all_nqns[0]}" + NC)
-
-        target_nqn = all_nqns[0]
-        portals_str = ",".join(valid_portals)
-
-        print(GREEN + f"\t\tNVMe Target NQN : {target_nqn}" + NC)
-        print(GREEN + f"\t\tNVMe Portals    : {portals_str}" + NC)
-
-        return portals_str, target_nqn
-
-    except Exception as e:
-        print(RED + f"Error fetching NVMe/TCP portals from {SSYip}: {e}" + NC)
-        exit(1)
-
-def wwn_to_nvme_uuid(wwn):
-    """Convert a 32-char hex WWN/ScsiDeviceIdString into an nvme-uuid.<uuid> string."""
-    wwn = re.sub(r'[^0-9a-fA-F]', '', wwn)
-    if len(wwn) != 32:
-        return None
-    b = [int(wwn[i:i+2], 16) for i in range(0, 32, 2)]
-    b[6] = (b[6] & 0x0F) | 0x40   # version 4
-    b[8] = (b[8] & 0x3F) | 0x80   # variant bits
-    return (
-        "nvme-uuid."
-        f"{b[0]:02x}{b[1]:02x}{b[2]:02x}{b[3]:02x}-"
-        f"{b[4]:02x}{b[5]:02x}-"
-        f"{b[6]:02x}{b[7]:02x}-"
-        f"{b[8]:02x}{b[9]:02x}-"
-        f"{b[10]:02x}{b[11]:02x}{b[12]:02x}{b[13]:02x}{b[14]:02x}{b[15]:02x}"
-    )
-
-
-def get_vd_info_by_nvme_uuid(nvme_uuid):
-    """Return the VD Caption whose ScsiDeviceIdString converts to the given nvme-uuid."""
-    server_host, ssy_user, ssy_pwd = read_credentials()
-    if not server_host:
-        return None
-
-    for host in server_host.split(","):
-        host = host.strip()
-        try:
-            response = subprocess.run(
-                ["curl", "-s", "-m", "3", "-k", "-L",
-                 "-H", f"ServerHost: {host}",
-                 "-u", f"{ssy_user}:{ssy_pwd}",
-                 f"https://{host}/RestService/rest.svc/1.0/virtualdisks"],
-                stdout=subprocess.PIPE
-            )
-            disks = json.loads(response.stdout.decode())
-            for disk in disks:
-                scsi_str = disk.get('ScsiDeviceIdString', '')
-                if scsi_str:
-                    candidate = wwn_to_nvme_uuid(scsi_str)
-                    if candidate and candidate.lower() == nvme_uuid.lower():
-                        if debug:
-                            print(GREEN + f"\tFound VD '{disk.get('Caption')}' for NVMe UUID {nvme_uuid}" + NC)
-                        return disk.get('Caption')
-        except Exception as e:
-            if debug:
-                print(RED + f"\tError in get_vd_info_by_nvme_uuid from {host}: {e}" + NC)
-    return None
-
-
-def get_ssy_protocol(ssy_name):
-    """Read the protocol field for an SSY storage entry from storage.cfg (default: iscsi)."""
-    try:
-        with open("/etc/pve/storage.cfg", "r") as f:
-            in_section = False
-            for line in f:
-                line = line.strip()
-                if line == f"ssy: {ssy_name}":
-                    in_section = True
-                elif in_section and line.startswith("protocol"):
-                    return line.split()[1]
-                elif line == "" and in_section:
-                    in_section = False
-    except Exception as e:
-        print(RED + f"Error reading protocol from storage.cfg: {e}" + NC)
-    return 'iscsi'
-
-
-
-def select_vd_template(SSYips, SSYuser, SSYpass, protocol=None):
+def select_vd_template(SSYips, SSYuser, SSYpass):
     for SSYip in [ip.strip() for ip in SSYips.split(",") if ip.strip()]:
-        vd_templates = get_vdt(SSYip, SSYuser, SSYpass, protocol=protocol)
+        vd_templates = get_vdt(SSYip, SSYuser, SSYpass)
         if vd_templates is None:
             print(RED + f"\t\tError: Not able to get the Virtual Disk Template from {SSYip}." + NC)
             continue
@@ -501,7 +261,7 @@ def select_vd_template(SSYips, SSYuser, SSYpass, protocol=None):
         else:
             return vd_templates[0]['Caption']
 
-def get_vdt(SSYip, SSYuser, SSYpass, protocol=None):
+def get_vdt(SSYip, SSYuser, SSYpass):
     if debug: print(YELLOW + f"\t\tFetching Virtual Disk Templates from {SSYip}..." + NC)
 
     try:
@@ -523,27 +283,6 @@ def get_vdt(SSYip, SSYuser, SSYpass, protocol=None):
         print(RED + "\tNo Virtual Disk Templates found on the SANsymphony server." + NC)
         print(YELLOW + "\tYou need to create a Virtual Disk Template before proceeding." + NC)
         exit(1)
-
-    if protocol is not None:
-        NVME_PROTOCOL_ENABLED = {
-            'iscsi':    0,
-            'nvme-tcp': 1,
-        }
-        type_value = NVME_PROTOCOL_ENABLED.get(protocol)
-        if type_value is not None:
-            filtered = [
-                t for t in vd_templates
-                if t.get('NVMeEnabled') == type_value
-            ]
-            if filtered:
-                if debug:
-                    print(YELLOW + f"\t\tFiltered {len(vd_templates)} templates down to "
-                                   f"{len(filtered)} matching protocol '{protocol}'." + NC)
-                vd_templates = filtered
-            else:
-                # Warn but fall back to all templates rather than blocking the user
-                print(YELLOW + f"\t\tWarning: No Virtual Disk Templates found matching "
-                               f"protocol '{protocol}'. Showing all templates." + NC)
 
     return vd_templates
      
@@ -571,8 +310,7 @@ def add_ssy_storage(params):
         "--targets", params['targets'],
         "--vdTemplateName", params['vdTemplateName'],
         "--shared", params['shared'],
-        "--disable", params['disable'],
-        "--protocol", params['protocol']
+        "--disable", params['disable']
     ]
 
     if params['nodes'] != "all":
@@ -604,7 +342,7 @@ def add_ssy_storage(params):
 
 def get_lvm_parameters(provided_params):
     params = {}
-    _params = ['LVMname', 'LVMsize', 'nodes', 'shared', 'disable', 'snapshotAsVolumeChain', 'SSYname']
+    _params = ['LVMname', 'LVMsize', 'nodes', 'shared', 'disable', 'SSYname']
 
     for param in _params:
         if provided_params.get(param) is None:
@@ -622,8 +360,7 @@ def get_lvm_parameters(provided_params):
                             break
                         print(RED + "\tLVM storage name cannot be empty or contain spaces or underscores. Please enter a valid name." + NC)
                 case 'SSYname':
-                    value, protocol = select_ssy_storage(provided_params)
-                    params['protocol'] = protocol
+                    value = select_ssy_storage(provided_params)
                 case 'nodes':
                     if provided_params.get('default') == '1':
                         value = "all"
@@ -647,24 +384,11 @@ def get_lvm_parameters(provided_params):
                             if value in ["1", "0", None]:
                                 break
                             print(RED + "\tInvalid input. Please enter '1' or '0'." + NC)
-                case 'snapshotAsVolumeChain':
-                    if provided_params.get('default') == '1':
-                        value = "1"
-                    else:
-                        while True:
-                            value = input("\tAllow snapshots as volume chain? (0|1) (default: 1): ").strip() or "1"
-                            if value in ["1", "0"]:
-                                break
-                            print(RED + "\tInvalid input. Please enter '1' or '0'." + NC)
                 case _:
                     value = input(f"\tEnter {param} (optional): ")
             params[param] = value or None
         else:
             params[param] = provided_params[param]
-
-    # Ensure protocol is populated even when SSYname was passed via CLI
-    if 'protocol' not in params:
-        params['protocol'] = get_ssy_protocol(params['SSYname'])
 
     return params
 
@@ -680,8 +404,6 @@ def select_ssy_storage(provided_params):
             exit(0)
         else:
             ssy_name = ssy_actions(provided_params)
-            protocol = get_ssy_protocol(ssy_name)
-            return ssy_name, protocol
 
     ssy_storage.append("Create New SSY Storage")
 
@@ -695,8 +417,7 @@ def select_ssy_storage(provided_params):
             if debug: print(f"\t\tYou selected: {ssy_storage[int(choice) - 1]}")
             if int(choice) == len(ssy_storage):
                 ssy_name = ssy_actions(provided_params)
-            else:
-                ssy_name = ssy_storage[int(choice) - 1]
+            ssy_name = ssy_storage[int(choice) - 1]
         elif choice:
             if any(ssy == choice for ssy in ssy_storage):
                 ssy_name = choice
@@ -709,7 +430,6 @@ def select_ssy_storage(provided_params):
                 lines = f.readlines()
 
             in_lvm_section = False
-            SSYips = SSYuser = SSYpass = vdt = protocol = None
             for line in lines:
                 line = line.strip()
                 if line == f"ssy: {ssy_name}":
@@ -723,17 +443,11 @@ def select_ssy_storage(provided_params):
                 elif in_lvm_section and line.startswith("vdTemplateName"):
                     vdt = line.split()[1]
                     if debug: print(YELLOW + f"\tFound VD Template Name of storage '{ssy_name}': {vdt}" + NC)
-                elif in_lvm_section and line.startswith("protocol"):
-                    protocol = line.split()[1]
-                    if debug: print(YELLOW + f"\tFound protocol of storage '{ssy_name}': {protocol}" + NC)
                 elif line == "":
                     in_lvm_section = False
-
-            if not protocol:
-                protocol = 'iscsi'  # default
         except Exception as e:
             print(RED + f"Error reading storage.cfg: {e}" + NC)
-
+            
         try:
             secure_folder = f"/etc/pve/priv/storage/{ssy_name}.pw"
             with open(secure_folder, "r") as f:
@@ -742,17 +456,14 @@ def select_ssy_storage(provided_params):
         except Exception as e:
             print(RED + f"Error reading credentials from secure storage '{secure_folder}' : {e}" + NC)                
 
-        isValid = validate_template_prefix(SSYips, SSYuser, SSYpass, vdt, ssy_name, protocol=protocol)
+        isValid = validate_template_prefix(SSYips, SSYuser, SSYpass, vdt, ssy_name)
 
         if isValid:
-            return ssy_name, protocol
+            return ssy_name
 
-def validate_template_prefix(SSYips, SSYuser, SSYpass, vdt, ssy_name, protocol=None):
-
-    if debug: print(YELLOW + f"\t\t validate_template_prefix() SSYips-{SSYips}, SSYuser-{SSYuser}, SSYpass-{SSYpass}, vdt-{vdt}, ssy_name-{ssy_name}, protocol-{protocol}" + NC)
-
+def validate_template_prefix(SSYips, SSYuser, SSYpass, vdt, ssy_name):
     for ip in [ip.strip() for ip in SSYips.split(",") if ip.strip()]:
-        vd_templates = get_vdt(ip, SSYuser, SSYpass, protocol=protocol)
+        vd_templates = get_vdt(ip, SSYuser, SSYpass)
         if vd_templates is None:
             print(RED + f"\t\tError: Not able to get the Virtual Disk Template from {ip}." + NC)
             continue
@@ -803,9 +514,6 @@ def add_lvm_storage(params, vd_name=None):
     if params['nodes'] != "all":
         add_pvesm_command.extend(["--nodes", params['nodes']])
 
-    if params.get('snapshotAsVolumeChain') == '1':
-        add_pvesm_command.extend(["--snapshot-as-volume-chain", "1"])
-
     if debug: print(YELLOW + f"\tThe following command will be executed:\n{add_pvesm_command}" + NC)
     
     try:
@@ -836,10 +544,15 @@ def create_vg(lvm_name, vd_name, mpath_device):
         exit(1)
 
 def create_vd(params):
-    print(GREEN + "\nCreating Virtual Disk..." + NC)
+    print(GREEN + "\nCreating Virtual Disk..." + NC)   
     try:
+        # vm_id = subprocess.check_output(
+        #     ["pvesh", "get", "/cluster/nextid"], text=True
+        # ).strip()
+        # if debug: print(GREEN + f"\tNext VM ID: {vm_id}" + NC)
         vm_id = "9000"  # Use a fixed VM ID for the virtual disk
 
+        # creating SANsymphony VD through pvesm alloc command
         pvesm_alloc_command = ["pvesm", "alloc", params['SSYname'], vm_id, params['LVMname'], params['LVMsize'] + "G"]
         result = subprocess.run(pvesm_alloc_command, check=True, text=True, capture_output=True)
     except subprocess.CalledProcessError as e:
@@ -847,91 +560,47 @@ def create_vd(params):
         print(f"\t{e.stderr}")
         exit(1)
 
-    protocol = params.get('protocol', 'iscsi')
+    # Extract the SCSI ID using regex
+    match = re.search(r'scsi-3([0-9a-fA-F]+):', result.stdout)
+    scsi_id = match.group(1)
+    if debug: print(GREEN + f"\tExtracted SCSI ID: {scsi_id}" + NC)
 
-    # ── NVMe/TCP path ─────────────────────────────────────────────────────────
-    if protocol == 'nvme-tcp':
-        match = re.search(r'(nvme-uuid\.[0-9a-fA-F-]+)', result.stdout)
-        if not match:
-            print(RED + "\tCould not extract NVMe UUID from pvesm alloc output." + NC)
-            if debug: print(YELLOW + f"\tpvesm output was: {result.stdout}" + NC)
-            exit(1)
+    vd_name = get_vd_info(scsi_id) # get the name of the created VD
+    print(GREEN + f"Virtual Disk '{vd_name}' (SCSI Id: {scsi_id}) got created and served to PVE node(s) successfully." + NC)
 
-        nvme_uuid = match.group(1)
-        if debug: print(GREEN + f"\tExtracted NVMe UUID: {nvme_uuid}" + NC)
+    mpath_device = None
 
-        vd_name = get_vd_info_by_nvme_uuid(nvme_uuid)
-        if not vd_name:
-            print(RED + f"\tCould not resolve VD name for NVMe UUID: {nvme_uuid}" + NC)
-            exit(1)
+    # Extract the multipath device name (e.g., mpatha) 
+    try:
+        for _ in range(10):  # Retry for 20 seconds
+            subprocess.run(["multipath", "-r"], check=True)
 
-        print(GREEN + f"Virtual Disk '{vd_name}' (NVMe UUID: {nvme_uuid}) created and served to PVE node(s) successfully." + NC)
+            cmd = f"multipath -ll | grep {scsi_id}"
 
-        # Wait for the block device symlink to appear
-        device_path = f"/dev/disk/by-id/{nvme_uuid}"
-        mpath_device = None
+            try:
+                output = subprocess.check_output(cmd, shell=True, text=True)
+                match = re.search(r'^(\S+)\s+\(', output)
 
-        print(GREEN + f"Waiting for NVMe device {device_path}..." + NC)
-        for _ in range(15):
-            # Nudge the NVMe subsystem to pick up the new namespace
-            subprocess.run(["nvme", "connect-all"],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            if os.path.exists(device_path):
-                mpath_device = device_path
-                break
+                if match:
+                    mpath_device = f"/dev/mapper/{match.group(1)}"
+                    break
+            except subprocess.CalledProcessError:
+                pass  # Ignore errors and retry
+
             time.sleep(2)
 
-        if debug: print(GREEN + f"\tNVMe device: {mpath_device}" + NC)
+        if debug: print(GREEN + f"\tMultipath Device name for SCSI ID {scsi_id}: {mpath_device}" + NC)
+    except subprocess.CalledProcessError as e:
+        print(f"\t{e.stderr}")
 
-        if mpath_device is None:
-            print(RED + f"\tCould not find NVMe device at {device_path}." + NC)
-            print(YELLOW + f"Terminating the script by deleting the created '{vd_name}' Virtual Disk..." + NC)
-            remove_lvm_attached_vd(params['LVMname'], vd_name)
-            exit(1)
+    if mpath_device is None:
+        print(RED + f"\tCould not find the device name for SCSI ID {scsi_id}." + NC)
 
-        return mpath_device, vd_name
-
-    # ── iSCSI path ────────────────────────────────────────────────────────────
-    else:
-        match = re.search(r'scsi-3([0-9a-fA-F]+):', result.stdout)
-        if not match:
-            print(RED + "\tCould not extract SCSI ID from pvesm alloc output." + NC)
-            if debug: print(YELLOW + f"\tpvesm output was: {result.stdout}" + NC)
-            exit(1)
-
-        scsi_id = match.group(1)
-        if debug: print(GREEN + f"\tExtracted SCSI ID: {scsi_id}" + NC)
-
-        vd_name = get_vd_info(scsi_id)
-        print(GREEN + f"Virtual Disk '{vd_name}' (SCSI Id: {scsi_id}) got created and served to PVE node(s) successfully." + NC)
-
-        wwid = "3" + scsi_id.lower()
-        mpath_device = None
-        try:
-            for _ in range(10):
-                subprocess.run(["multipath", "-r", wwid], check=False)
-                cmd = f"multipath -ll {wwid}| grep {scsi_id}"
-                try:
-                    output = subprocess.check_output(cmd, shell=True, text=True)
-                    match = re.search(r'^(\S+)\s+\(', output)
-                    if match:
-                        mpath_device = f"/dev/mapper/{match.group(1)}"
-                        break
-                except subprocess.CalledProcessError:
-                    pass
-                time.sleep(2)
-
-            if debug: print(GREEN + f"\tMultipath Device name for SCSI ID {scsi_id}: {mpath_device}" + NC)
-        except subprocess.CalledProcessError as e:
-            print(f"\t{e.stderr}")
-
-        if mpath_device is None:
-            print(RED + f"\tCould not find the device name for SCSI ID {scsi_id}." + NC)
-            print(YELLOW + f"Terminating the script by deleting the created '{vd_name}' Virtual Disk..." + NC)
-            remove_lvm_attached_vd(params['LVMname'], vd_name)
-            exit(1)
-
-        return mpath_device, vd_name
+        print(YELLOW + f"Terminating the script by deleting the created '{vd_name}' Virtual Disk..." + NC)
+        remove_lvm_attached_vd(params['LVMname'], vd_name)
+        exit(1)
+        
+    return mpath_device, vd_name
 
 def read_credentials():
     storage_cfg_file = "/etc/pve/storage.cfg"
@@ -966,8 +635,7 @@ def read_credentials():
             ssy_pwd = base64.b64decode(encoded).decode("utf-8")
         except Exception as e:
             if debug: print(RED + f"Error reading credentials from secure storage '{secure_folder}': {e}" + NC)
-            print(RED + f"Error reading credentials");
-
+            print(RED + f"Error reading credentials")
 
     return ssy_ip, ssy_user, ssy_pwd
 
@@ -1289,57 +957,57 @@ def nodes_rescan_iscsi(nodes_ip):
             print(RED + f"Error during iSCSI session rescan on {node}: {e}" + NC)
             pass
 
-def nodes_rescan_nvme(nodes_ip):
-    if not nodes_ip:
-        return
-    local_ip = socket.gethostbyname(socket.gethostname())
-    for node in nodes_ip:
-        try:
-            if node != local_ip:
-                print(GREEN + f"Rescanning NVMe/TCP sessions on node: {node}..." + NC)
-                rescan_cmd = ["ssh", "-o", "StrictHostKeyChecking=no", node, "nvme connect-all"]
-                subprocess.run(
-                    rescan_cmd,
-                    check=True,
-                    stdout=None if debug else subprocess.DEVNULL,
-                    stderr=None if debug else subprocess.DEVNULL,
-                    text=True
-                )
-        except subprocess.CalledProcessError as e:
-            print(RED + f"Error during NVMe session rescan on {node}: {e}" + NC)
-
-def reload_multipath(nodes_ip):
+def restart_pve_services(nodes_ip):
     if not nodes_ip:
         try:
             # Restart multipathd
-            print(GREEN + f"Reloading multipath..." + NC)
-            multipathr_cmd = ["multipath", "-r"]
-            multipathr_result = subprocess.run(
-                multipathr_cmd,
+            print(GREEN + f"Restarting multipathd..." + NC)
+            multipathd_cmd = ["systemctl", "restart", "multipathd"]
+            multipathd_result = subprocess.run(
+                multipathd_cmd,
+                check=True,
+                text=True
+            )
+
+            # Restart Proxmox services
+            print(GREEN + f"Restarting Proxmox services..." + NC)
+            proxmox_cmd = ["systemctl", "restart", "pvedaemon", "pveproxy", "pvestatd", "pvescheduler"]
+            proxmox_result = subprocess.run(
+                proxmox_cmd,
                 check=True,
                 text=True
             )
 
             return
         except subprocess.CalledProcessError as e:
-            print(RED + f"Error during iSCSI session rescan on {node}: {e}" + NC)
+            print(RED + f"Error during iSCSI session rescan or service restart on {node}: {e}" + NC)
             exit(1)
         
     for node in nodes_ip:
         try:
             # Restart multipathd
-            print(GREEN + f"Reloading multipath on {node}..." + NC)
-            multipathr_cmd = ["ssh", "-o", "StrictHostKeyChecking=no", node, "multipath -r"]
-            multipathr_result = subprocess.run(
-                multipathr_cmd,
+            print(GREEN + f"Restarting multipathd on {node}..." + NC)
+            multipathd_cmd = ["ssh", "-o", "StrictHostKeyChecking=no", node, "systemctl restart multipathd"]
+            multipathd_result = subprocess.run(
+                multipathd_cmd,
                 check=True,
                 text=True
             )
 
+            # Restart Proxmox services
+            print(GREEN + f"Restarting Proxmox services on {node}..." + NC)
+            proxmox_cmd = [
+                "ssh", "-o", "StrictHostKeyChecking=no", node,
+                "systemctl restart pvedaemon pveproxy pvestatd pvescheduler"
+            ]
+            proxmox_result = subprocess.run(
+                proxmox_cmd,
+                check=True,
+                text=True
+            )
         except subprocess.CalledProcessError as e:
-            print(RED + f"Error during iSCSI session rescan on {node}: {e}" + NC)
+            print(RED + f"Error during iSCSI session rescan or service restart on {node}: {e}" + NC)
             exit(1)
-
 
 def ssy_multipath():
     try:
@@ -1359,6 +1027,7 @@ def ssy_actions(provided_params):
     add_ssy_storage(params)
 
     nodes_ip = get_nodes_ip(params['nodes'])
+    restart_pve_services(nodes_ip)
 
     output_status(params['SSYname'])
 
@@ -1369,18 +1038,12 @@ def lvm_actions(provided_params):
 
     mpath_device, vd_name = create_vd(params)
     nodes_ip = get_nodes_ip(params['nodes'])
-
-    if params.get('protocol') == 'nvme-tcp':
-        nodes_rescan_nvme(nodes_ip)
-    else:
-        nodes_rescan_iscsi(nodes_ip)
+    nodes_rescan_iscsi(nodes_ip)
 
     create_vg(params['LVMname'], vd_name, mpath_device)
     add_lvm_storage(params, vd_name)
-
-    if params.get('protocol') == 'iscsi':
-        reload_multipath(nodes_ip)
-
+    
+    restart_pve_services(nodes_ip)
     output_status(params['LVMname'])
 
 def parse_arguments():
@@ -1397,13 +1060,11 @@ def parse_arguments():
         ("--SSYusername", "SANsymphony Username"),
         ("--SSYpassword", "SANsymphony Password"),
         ("--vdTemplateName", "Virtual Disk Template Name"),
-        ("--portals", "iscsi/nvme-tcp Portals"),
-        ("--targets", "iscsi/nvme-tcp Targets"),
+        ("--portals", "iSCSI Portals"),
+        ("--targets", "iSCSI Targets"),
         ("--nodes", "Proxmox Node names"),
-        ("--protocol", "iscsi/nvme-tcp"),
         ("--shared", "Shared storage?"),
         ("--disable", "Disable storage class?"),
-        ("--snapshotAsVolumeChain", "Allow snapshots as volume chain? (0|1)"),
         ("--default", "use Default parameters?"),
     ]
 
