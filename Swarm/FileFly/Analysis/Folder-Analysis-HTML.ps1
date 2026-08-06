@@ -85,7 +85,8 @@ Write-Host "Please wait..." -ForegroundColor Yellow
 
 function Format-Duration {
     param([TimeSpan]$Span)
-    if ($Span.TotalHours -ge 1) { return $Span.ToString('hh\:mm\:ss') }
+    if ($Span.TotalDays -ge 1) { return $Span.ToString('dd\.hh\:mm\:ss') }
+    elseif ($Span.TotalHours -ge 1) { return $Span.ToString('hh\:mm\:ss') }
     return $Span.ToString('mm\:ss')
 }
 
