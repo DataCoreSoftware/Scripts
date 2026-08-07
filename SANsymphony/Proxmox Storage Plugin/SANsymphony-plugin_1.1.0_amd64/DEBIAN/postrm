@@ -1,0 +1,33 @@
+#!/bin/sh
+
+set -e
+
+case "$1" in
+	purge)
+        BACKUP_DIR="/var/backups/SANsymphony-Plugin-Backup"
+
+        # Restore the admin's pre-install multipath.conf, if we backed one
+        # up. The backup filename is dated (multipath.conf.YYYYMMDD), or, on
+        # a host upgraded from an older plugin version, the plain undated
+        # "multipath.conf" — match either.
+        backup_file=""
+        for f in "$BACKUP_DIR"/multipath.conf*; do
+            [ -f "$f" ] && { backup_file="$f"; break; }
+        done
+
+        if [ -n "$backup_file" ]; then
+            echo "Restoring original /etc/multipath.conf from backup..."
+            cp "$backup_file" /etc/multipath.conf
+        fi
+
+        # Drop the recorded udev-rule hash so a future install re-triggers a reload.
+        rm -f /var/lib/ssy-plugin/99-datacore.rules.sha256
+        rmdir --ignore-fail-on-non-empty /var/lib/ssy-plugin 2>/dev/null || true
+
+        # Remove our backup dir last (after the restore above).
+        rm -rf "$BACKUP_DIR"
+        ;;
+
+	*)
+		;;
+esac

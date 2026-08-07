@@ -1,36 +1,38 @@
 # DataCore Storage Plugin for Proxmox VE
 
-A Proxmox VE storage plugin to integrate [DataCore SANsymphony™](https://www.datacore.com/products/sansymphony/) storage using **iSCSI**, with multipath support and custom CLI management.
+A Proxmox VE storage plugin to integrate [DataCore SANsymphony™](https://www.datacore.com/products/sansymphony/) storage using **iSCSI** or **NVMe/TCP**, with multipath support and custom CLI management.
 
 ## 📚 Table of Contents
 
 1. [Overview](#-overview)
-2. [Prerequisites](#%EF%B8%8F-prerequisites)
-3. [Installation](#-installation)
+2. [What's New in v1.1.0](#-whats-new-in-v110)
+3. [Prerequisites](#%EF%B8%8F-prerequisites)
+4. [Installation](#-installation)
    - [Using APT Repository (Recommended)](#-recommended-using-apt-repository)
    - [Using Debian Package (.deb)](#-alternative-debian-package-deb)
    - [Proxmox Configuration Updates Performed After Plugin Installation](#%EF%B8%8F-proxmox-configuration-updates-performed-after-plugin-installation)
-4. [Plugin Configuration](#%EF%B8%8F-plugin-configuration)
+   - [Uninstalling the Plugin](#-uninstalling-the-plugin)
+5. [Plugin Configuration](#%EF%B8%8F-plugin-configuration)
    - [Using ssy-plugin (Recommended)](#-recommended-using-ssy-plugin-command)
    - [Using pvesm add command](#-using-pvesm-add-command)
    - [Manual storage.cfg editing](#-manually-editing-storage-configuration-file-etcpvestoragecfg)
-5. [Troubleshooting](#-troubleshooting)
+6. [Troubleshooting](#-troubleshooting)
 
 <br/>
 
 References
-- [SANsymphony Storage Plugin for Proxmox Preview](https://docs.datacore.com/SANsymphony-Preview/Preview-SANsymphony-Storage-Plugin-for-Proxmox-WebHelp/Proxmox-Plugin/WebHelp/Overview.htm) – Complete Proxmox plugin Preview configuration details.
+- [SANsymphony Storage Plugin for Proxmox](https://docs.datacore.com/SANsymphony-Storage-Plugin-for-Proxmox-WebHelp/Proxmox-Plugin/WebHelp/Overview.htm) – Complete Proxmox plugin configuration details.
 - [Proxmox Host Configuration Guide](https://docs.datacore.com/SSV-WebHelp/SSV-WebHelp/FAQ/Host-Configuration-Guide/Proxmox_Configuration_Guide.htm) – Host setup, network configuration instructions and more.
 
 <br/>
 
 # ✨ Overview
 
-The plugin enables shared iSCSI storage managed by DataCore SANsymphony to be used directly from Proxmox VE. You can manage storage via the Proxmox UI/CLI or using the built-in `ssy-plugin` command-line interface.
+The plugin enables shared **iSCSI** or **NVMe/TCP** storage managed by DataCore SANsymphony to be used directly from Proxmox VE. You can manage storage via the Proxmox UI/CLI or using the built-in `ssy-plugin` command-line interface.
 
 ### Key capabilities include:
 - **Advanced Storage Configuration**: Automates the setup of [Udev Rules](https://docs.datacore.com/SSV-WebHelp/SSV-WebHelp/FAQ/Host-Configuration-Guide/Proxmox_Configuration_Guide.htm#SCSI), [iSCSI Settings](https://docs.datacore.com/SSV-WebHelp/SSV-WebHelp/FAQ/Host-Configuration-Guide/Proxmox_Configuration_Guide.htm?Highlight=Proxmox#iSCSI) and [SCSI Multipath](https://docs.datacore.com/SSV-WebHelp/SSV-WebHelp/FAQ/Host-Configuration-Guide/Proxmox_Configuration_Guide.htm?Highlight=Proxmox#iSCSI2) for optimal performance.
-- **Multi-Session iSCSI Management**: Handles multiple iSCSI sessions simultaneously for path redundancy.
+- **Multi-Path Storage Management**: Handles multiple iSCSI sessions or NVMe/TCP connections simultaneously for path redundancy.
 - **Seamless Shared Storage**: Enables unified provisioning across the entire Proxmox cluster.
 - **Dynamic Raw Device Mapping (RDM)**: Facilitates dynamic provisioning of Virtual Disks via RDM.
 - **LVM Integration**: Full support for LVM volumes layered on top of DataCore SANsymphony Virtual Disks.
@@ -38,10 +40,26 @@ The plugin enables shared iSCSI storage managed by DataCore SANsymphony to be us
 - **Cluster High Availability (HA) & Migration**: As the plugin provides true Shared Storage, it fully supports Proxmox HA environments:
   - **Live Migration**: Seamlessly move running VMs between nodes with zero downtime.
   - **Automatic HA Failover**: Integrated with the PVE HA stack to restart VMs on healthy nodes if a host fails.
-  - **Consistent State**: Shared LVM/iSCSI targets ensure all nodes have simultaneous, coordinated access to VM data.
+  - **Consistent State**: Shared LVM/storage targets ensure all nodes have simultaneous, coordinated access to VM data.
 
 >[!IMPORTANT]
-> The SANsymphony Custom Storage Plugin 1.0.3 has been validated and tested with Proxmox VE versions **8** and **9.1.1**. If you upgrade or install Proxmox VE to a version higher than **9.1.1**, you may see the following warning message: "**PVE::Storage::Custom::SANsymphonyPlugin is implementing an older storage API; an upgrade is recommended**". This warning is informational and does not typically impact the functionality of the plugin.
+> The SANsymphony Custom Storage Plugin **1.1.0** has been validated and tested with Proxmox VE versions **8** and **9.2**. If you upgrade or install Proxmox VE to a version higher than **9.2**, you may see the following warning message: "**PVE::Storage::Custom::SANsymphonyPlugin is implementing an older storage API; an upgrade is recommended**". This warning is informational and does not typically impact the functionality of the plugin.
+
+<br/>
+
+# 🆕 What's New in v1.1.0
+
+### New features
+- **NVMe/TCP support**: A new `protocol` parameter (`iscsi` | `nvme-tcp`) lets a storage class use NVMe/TCP as the transport. `iscsi` remains the default, so existing configurations are unchanged. See [Plugin Configuration](#%EF%B8%8F-plugin-configuration).
+- **NVMe/TCP multipath view**: `ssy-plugin multipath` (via `ssy-multipath`) now renders NVMe/TCP topology and path status in addition to iSCSI.
+- **LVM snapshot-as-volume-chain**: The `ssy-plugin` LVM action accepts a new `snapshotAsVolumeChain` (`0` | `1`) parameter to enable Proxmox snapshot-as-volume-chain on LVM storage layered over SANsymphony.
+
+### Enhancements
+- **Leaner dependencies**: `open-iscsi` and `multipath-tools` are no longer forced dependencies. Install only what your protocol needs — `open-iscsi` + `multipath-tools` for iSCSI, or `nvme-cli` for NVMe/TCP. See [Prerequisites](#%EF%B8%8F-prerequisites).
+- **Per-target iSCSI tuning**: The recommended iSCSI settings are now applied per target at login time (via `iscsiadm`) instead of editing the global `/etc/iscsi/iscsid.conf`. The `ssy-configure-iscsid` helper has been removed.
+- **Smarter udev reload**: The `99-datacore.rules` udev rule is reloaded on install only when its contents actually change (tracked via a SHA-256 hash), avoiding unnecessary reloads.
+- **Faster storage operations**: Adding a storage class no longer restarts the Proxmox services (`pvedaemon`, `pveproxy`, `pvestatd`, `pvescheduler`) across every node — it now only reloads multipath, significantly reducing execution time.
+- **Safer uninstall**: Package removal is now blocked while `ssy:` storage classes are still configured, and purging the package restores the original `/etc/multipath.conf` that was backed up at install time. See [Uninstalling the Plugin](#-uninstalling-the-plugin).
 
 <br/>
 
@@ -49,11 +67,19 @@ The plugin enables shared iSCSI storage managed by DataCore SANsymphony to be us
 
 Before using the plugin, ensure the following:
 - Ensure that a **Virtual Disk Template** is available or create one to use with the plugin.
-- If installing the plugin via the **.deb** package, you must install the below packages.
+- Install the packages required for the storage protocol you intend to use. These are no longer installed automatically by the plugin package, so install them for whichever protocol(s) the node uses:
+  - **iSCSI**: `open-iscsi` and `multipath-tools`
+    ```bash
+    apt install open-iscsi multipath-tools
+    ```
+  - **NVMe/TCP**: `nvme-cli`
+    ```bash
+    apt install nvme-cli
+    modprobe nvme-tcp
+    ```
+- If installing the plugin via the **.deb** package, also install `jq` (it is resolved automatically when using the APT repository):
   ```bash
-  apt update
-  apt install jq 
-  apt install multipath-tools
+  apt install jq
   ```
 
 <br/>
@@ -89,12 +115,12 @@ apt install ssy-plugin
 
 ### 1. Download the package
 ```bash
-wget https://github.com/DataCoreSoftware/Scripts/releases/download/SSY_PVE_Plugin/SANsymphony-plugin_1.0.3_amd64.deb
+wget https://github.com/DataCoreSoftware/Scripts/releases/download/SSY_PVE_Plugin/SANsymphony-plugin_1.1.0_amd64.deb
 ```
 
 ### 2. Install it
 ```bash
-dpkg -i SANsymphony-plugin_1.0.3_amd64.deb
+dpkg -i SANsymphony-plugin_1.1.0_amd64.deb
 ```
 
 ## 🛠️ Proxmox Configuration Updates Performed After Plugin Installation
@@ -105,26 +131,17 @@ These updates are required for proper operation of SANsymphony storage with Prox
 
 ### iSCSI Settings
 
-On Proxmox VE nodes, the iSCSI service does not start automatically by default after a system reboot. During installation of the SANsymphony Custom Storage plugin, the installer updates the iSCSI configuration to ensure reliable connectivity to SANsymphony storage.
+To ensure reliable connectivity to SANsymphony storage, the plugin applies the recommended iSCSI settings **per target when it logs in** (using `iscsiadm --mode node --targetname <target> --op update`), instead of editing the global `/etc/iscsi/iscsid.conf` file. The following settings are applied for each target:
 
-- Configures the iSCSI initiator to start automatically by updating the `/etc/iscsi/iscsid.conf` file:
-  ```
-  node.startup = manual 
-  node.leading_login = No
-  ```
-- Updates the session replacement timeout from the default value of **node.session.timeo.replacement_timeout** (**120** seconds) to the recommended value of **15** seconds.
-  ```
-  node.session.timeo.replacement_timeout = 15
-  ```
-- Increases the initial login retry count to the recommended value of **node.session.initial_login_retry_max** (**64**) to handle scenarios where a port reinitialization prevents automatic login.
-  ```
-  node.session.initial_login_retry_max = 64
-  ```
-  These changes are applied automatically by the plugin immediately after installation and do not require manual configuration. 
-- A backup of the original `iscsid.conf` file is stored at the following location:
-  ```
-  /var/backups/SANsymphony-Plugin-Backup/iscsid.conf
-  ```
+```
+node.startup = manual
+node.leading_login = No
+node.session.timeo.replacement_timeout = 15
+node.session.initial_login_retry_max = 0
+```
+
+These settings are applied automatically each time a target is activated and do not require any manual configuration.
+
 For more information, refer to the [iSCSI Settings](https://docs.datacore.com/SSV-WebHelp/SSV-WebHelp/FAQ/Host-Configuration-Guide/Proxmox_Configuration_Guide.htm#iSCSI) section in the Proxmox Configuration Guide. 
 
 ### iSCSI Multipath Configuration
@@ -138,7 +155,7 @@ As part of the installation, the plugin creates or updates the multipath configu
 
 If the `multipath.conf` file exists, a backup is created at the following location:
   ```
-  /var/backups/SANsymphony-Plugin-Backup/multipath.conf
+  /var/backups/SANsymphony-Plugin-Backup/multipath.conf.<YYYYMMDD>
   ```
 
 The configuration applied includes DataCore-recommended defaults and device-specific settings equivalent to the following:
@@ -172,7 +189,7 @@ devices {
 
 ### Multipath Service Restart
 
-After applying the multipath configuration, the installer restarts the multipath service, so the changes take effect immediately:
+After applying the multipath configuration, the installer reloads the multipath service, so the changes take effect immediately:
 ```
 multipath -r
 ```
@@ -189,7 +206,7 @@ With the following rule:
 ```
 SUBSYSTEM=="block", ACTION=="add", ATTRS{vendor}=="DataCore", ATTRS{model}=="Virtual Disk    ", RUN+="/bin/sh -c 'echo 80 > /sys/block/%k/device/timeout' "
 ```
-The udev rules are reloaded automatically by the SANsymphony Custom Storage Plugin so the changes take effect immediately.
+The udev rules are reloaded automatically **only if the rule file has changed** since the last installation (the installer tracks the rule's SHA-256 hash at `/var/lib/ssy-plugin/99-datacore.rules.sha256`). If the rule is unchanged, the reload is skipped to avoid unnecessary delays. When a reload is triggered, the following commands are run:
 ```
 udevadm control --reload-rules
 udevadm trigger --subsystem-match=block
@@ -208,12 +225,30 @@ To ensure that the plugin configurations are correctly loaded and integrated int
 >[!NOTE]
 >The restart commands are safe and include fallbacks to avoid blocking the installation if a service is not running.
 
+## 🧹 Uninstalling the Plugin
+
+>[!IMPORTANT]
+> Package removal is **blocked while any `ssy:` storage class is still configured** in `/etc/pve/storage.cfg`, since those entries would fail to load once the plugin is gone. Remove the storage classes first, then remove the package:
+> ```bash
+> pvesm remove <SSY Storage Class Name>
+> apt remove ssy-plugin        # or: dpkg -r ssy-plugin
+> ```
+> Upgrades are not affected — existing storage classes may remain in place during an upgrade.
+
+Purging the package (`apt purge ssy-plugin`) additionally restores the original `/etc/multipath.conf` that was backed up during installation (from `/var/backups/SANsymphony-Plugin-Backup/`) and removes the plugin's tracking files.
+
 <br/>
 
 # ⚙️ Plugin Configuration
 
 >[!NOTE]
 > In a cluster setup, configuration only needs to be performed on one node.
+
+>[!NOTE]
+> **Storage protocol:** The `protocol` parameter selects the transport, either `iscsi` or `nvme-tcp`. It is **optional** and defaults to `iscsi`. The `portals` and `targets` parameters apply to the chosen protocol — IQNs for iSCSI, NQN for NVMe/TCP.
+> - **iSCSI:** the number of `portals` must equal the number of `targets` (each portal is paired with one target).
+> - **NVMe/TCP:** multiple `portals` are allowed, but only a **single** NQN `target` per Server Group is supported. Target discovery uses port **8009**.
+> - The **Virtual Disk Template must match the protocol**: use an NVMe-enabled template for `nvme-tcp` and a non-NVMe template for `iscsi`. Disk allocation fails if the template's transport does not match the storage class.
 
 After installing the plugin, configure Proxmox VE to use it. Since Proxmox VE does not currently support adding custom storage plugins via the GUI, use the `pvesm` command or the built-in `ssy-plugin` command:
 
@@ -268,10 +303,12 @@ ssy-plugin [ACTION] [OPTIONS]
 | SSYusername    | The username used to authenticate with the SANsymphony REST API.                                                                                                                   |
 | SSYpassword    | The password used to authenticate with the SANsymphony REST API.                                                                                                                   |
 | vdTemplateName | The name of the Virtual Disk Template to use for provisioning disks from SANsymphony. This template must already exist in SANsymphony.                                             |
-| portals        | One or more iSCSI FrontEnd portal IP addresses for SANsymphony, comma-separated. Use `all` to auto-discover FE iSCSI connections.                                                  |
+| portals        | One or more FrontEnd portal IP addresses for SANsymphony (iSCSI or NVMe/TCP), comma-separated. Use `all` to auto-discover connections.                                              |
 | nodes          | A comma-separated list of Proxmox node names. Use `all` to include all PVE nodes in the cluster.                                                                                   |
-| shared         | (`optional`) Set to `1` if the storage class should be shared across all nodes. If omitted, the storage class is treated as local.                                                 |
+| shared         | (`optional`) Set to `1` if the storage class should be shared across all nodes. If omitted, the storage class is treated as local. Defaults to `1`.                                |
 | disable        | (`optional`) Set to `1` to temporarily disable the storage class without removing it.                                                                                              |
+| protocol       | (`optional`) Storage protocol: `iscsi` or `nvme-tcp`. Defaults to `iscsi`.                                                                                                          |
+| snapshotAsVolumeChain | (`optional`, **LVM only**) Set to `1` to enable PVE snapshot-as-volume-chain on the LVM storage class. Defaults to `1`.                                                   |
 | default        | (`optional`) Set to `1` to use default parameters where applicable.                                                                                                                |
 
 **Examples:**
@@ -282,6 +319,7 @@ ssy-plugin ssy \
   --SSYusername administrator \
   --SSYpassword Password \
   --vdTemplateName Mirrored-VD \
+  --protocol nvme-tcp \
   --portals all \
   --nodes all \
   --shared 1 \
@@ -319,13 +357,15 @@ pvesm add ssy <SSY Storage Class Name> \
     --SSYipAddress <SSY Management IP Address list> \
     --SSYusername <SSY Username> \
     --SSYpassword <SSY Password> \
-    --portals <SSY FrontEnd iSCSI portals list> \
-    --targets <SSY FrontEnd iSCSI Target IQN list> \
+    --portals <SSY FrontEnd portal IP list> \
+    --targets <SSY FrontEnd target IQN/NQN list> \
     --vdTemplateName <SSY Virtual Disk Template Name> \
     --nodes <Proxmox Node Names list> \
+    --protocol iscsi \
     --shared 1 \
     --disable 0
 ```
+> `--protocol` is optional and defaults to `iscsi`; use `--protocol nvme-tcp` for NVMe/TCP.
 
 ## 🧭 Manually editing storage configuration file `/etc/pve/storage.cfg`
 
@@ -333,10 +373,11 @@ pvesm add ssy <SSY Storage Class Name> \
 ssy: <SSY Storage Class Name>
    SSYipAddress <SSY Management IP Address list>
    SSYusername <SSY Username>
-   portals <SSY FrontEnd iSCSI portals list>
-   targets <SSY FrontEnd iSCSI Target IQN list>
+   portals <SSY FrontEnd portal IP list>
+   targets <SSY FrontEnd target IQN/NQN list>
    vdTemplateName <SSY Virtual Disk Template Name>
    nodes <Proxmox Node Names list>
+   protocol iscsi
    shared 1
    disable 0
 ```
@@ -347,10 +388,11 @@ ssy: <SSY Storage Class Name>
 | SSYipAddress   | One or more comma-separated SANsymphony management IP addresses. Ensure Proxmox nodes can reach these IPs.                                                                 |
 | SSYusername    | The username used to authenticate with the SANsymphony REST API.                                                                                                           |
 | SSYpassword    | The password used to authenticate with the SANsymphony REST API. It is saved in a file readable only by the root user(`/etc/pve/priv/storage/<Storage-Name>.pw`).          |
-| portals        | One or more iSCSI FE portal IP addresses, comma-separated. These are used for initiator connections.                                                                       |
-| targets        | One or more iSCSI target IQNs (Initiator Qualified Names), comma-separated.                                                                                                |
+| portals        | One or more FE portal IP addresses (iSCSI or NVMe/TCP), comma-separated. These are used for initiator connections.                                                         |
+| targets        | One or more target identifiers, comma-separated: IQNs for iSCSI, one NQN for NVMe/TCP.                                                                                       |
 | vdTemplateName | The name of the Virtual Disk Template to use for provisioning disks from DataCore. This template must already exist in SANsymphony.                                        |
 | nodes          | (`optional`) A comma-separated list of Proxmox node names. Use this parameter to restrict the plugin to specific nodes. If omitted, the storage is available on all nodes. |
+| protocol       | (`optional`) Storage protocol: `iscsi` or `nvme-tcp`. Defaults to `iscsi`.                                                                                                |
 | shared         | (`optional`) Set to `1` to mark the storage as shared across all nodes. If omitted, the storage is treated as local.                                                       |
 | disable        | (`optional`) Set to `1` to temporarily disable the storage without deleting it.                                                                                            |
 
@@ -363,12 +405,26 @@ ssy: Storage-Name
    targets iqn.2000-08.com.datacore:ssy1-1,iqn.2000-08.com.datacore:ssy2-1
    vdTemplateName SSY-VDT
    nodes pve1,pve2
+   protocol iscsi
    shared 1
    disable 0
 ```
 
+**Example (NVMe/TCP):**
+```
+ssy: Storage-Name-NVMe
+   SSYipAddress 10.15.1.19,10.15.1.18
+   SSYusername administrator
+   portals 10.15.1.17
+   targets nqn.2000-08.com.datacore:ssy1
+   vdTemplateName SSY-VDT-NVMe
+   protocol nvme-tcp
+   nodes pve1,pve2
+   shared 1
+```
+
 >[!NOTE]
->The SSYpassword is stored in the location `/etc/pve/priv/storage/<Storage-Name>.pw`.
+>The SSYpassword is stored **Base64-encoded** in `/etc/pve/priv/storage/<Storage-Name>.pw`, readable only by root. During upgrades, if a plaintext SSY password is found in `storage.cfg`, the installer automatically migrates it to the appropriate file and removes the plaintext entry from `storage.cfg`.
 
 <br/>
 
@@ -385,8 +441,10 @@ If you encounter issues while using the plugin, consider the following steps:
   Useful commands:
   ```bash
   journalctl -xe        # displays Proxmox logs
-  multipath -ll -v3     # diagnose issues with the multipath service
-  iscsiadm -m node      # list what iSCSI nodes are mounted
+  multipath -ll -v3     # diagnose issues with the multipath service (iSCSI)
+  iscsiadm -m node      # list what iSCSI nodes are mounted (iSCSI)
+  nvme list             # list connected NVMe devices (NVMe/TCP)
+  nvme list-subsys      # show NVMe subsystem and session info (NVMe/TCP)
   ```
 - **Multipath Configuration:** Verify that your `multipath.conf` is correctly configured and that multipath devices are recognized. Use `multipath -ll` to list the current multipath devices.
 - **SANsymphony User Permissions:** Ensure that the SANsymphony user has the necessary permissions to create and manage storage.

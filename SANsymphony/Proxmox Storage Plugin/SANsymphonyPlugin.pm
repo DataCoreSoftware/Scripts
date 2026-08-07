@@ -17,6 +17,7 @@ my $rescan_filename = "/var/run/ssy-iscsi-rescan.lock";
 my $vd_id;
 my $DEBUG = 0;
 my $default_protocol = 'iscsi';
+my $pluginVersion = "ProxmoxPlugin_1.1.0";
 
 my $ISCSIADM = '/usr/bin/iscsiadm';
 my $found_iscsi_support;
@@ -26,7 +27,7 @@ my $MULTIPATH_CLI = '/usr/sbin/multipath';
 
 sub api {
     my $minver = 3;
-    my $maxver = 14;
+    my $maxver = 15;
 
     my $apiver;
     eval {
@@ -406,9 +407,14 @@ sub iscsi_session {
 }
 
 sub nvme_discovery {
-    my ($portal, $cache, $storeid) = @_;
+    my ($target_in, $portal, $cache, $storeid) = @_;
 
     assert_nvme_support();
+
+    if (!nvme_test_portal($target_in, $portal, $cache)) {
+        print "Portal $portal is unreachable - Portal test failed on '$storeid' storage.\n";
+        return undef;
+    }
 
     my $res = {};
     my $cmd = [$NVME_CLI, 'discover', '--transport', 'tcp', '--traddr', $portal, '--trsvcid', '8009'];
@@ -447,7 +453,7 @@ sub nvme_login {
 
     assert_nvme_support();
 
-    my $res = nvme_discovery($portal, $cache, $storeid);
+    my $res = nvme_discovery($target, $portal, $cache, $storeid);
     return if !$res;
     
     my ($entry) = grep { $_->{portal} eq $portal } @{$res->{$target}};
@@ -513,6 +519,32 @@ sub nvme_session {
     return $cache->{nvme_sessions}->{$target};
 }
 
+sub nvme_test_session {
+    my ($session_id) = @_;
+
+    my $state = file_read_firstline("/sys/class/nvme/$session_id/state");
+    return $state && $state =~ /^live/ ? 1 : 0;
+}
+
+sub nvme_test_portal {
+    my ($target, $portal, $cache) = @_;
+    $cache //= {};
+
+    if (defined($target)) {
+        # check controller state instead if available
+        my $sessions = nvme_session($cache, $target);
+        for my $session (@{ $sessions // [] }) {
+            next if $session->{portal} ne $portal;
+            my $state = nvme_test_session($session->{session_id});
+            return $state if $state;
+        }
+    }
+    # check portal via tcp
+    my ($server, $port) = PVE::Tools::parse_host_and_port($portal);
+    return 0 if !$server;
+    return PVE::Network::tcp_ping($server, $port || 8009, 2);
+}
+
 sub activate_storage {
     my ($class, $storeid, $scfg, $cache) = @_;
 
@@ -527,8 +559,6 @@ sub activate_storage {
     }
 
     ssy_register_host($scfg, $storeid);
-
-    delete_stale_virtual_disks();
 }
 
 sub activate_nvme_storage {
@@ -601,61 +631,6 @@ sub activate_iscsi_storage {
     }
 
     iscsi_session_rescan(0, @ssy_session_list) if scalar @ssy_session_list;
-}
-
-sub delete_stale_virtual_disks {
-    dir_glob_foreach('/sys/block', qr/^sd[a-z]+$/, sub {
-        my ($dev_name) = @_;
-        my $dev_path = "/sys/block/$dev_name";
-
-        # Read size
-        my $size_file = "$dev_path/size";
-        return unless -e $size_file;
-        open my $fh, '<', $size_file or return;
-        my $size = <$fh>;
-        close $fh;
-        chomp $size;
-
-        # Only care about 0-byte devices
-        return if $size != 0;
-
-        # Read vendor
-        my $vendor_file = "$dev_path/device/vendor";
-        my $vendor = '';
-        if (-e $vendor_file) {
-            open my $vf, '<', $vendor_file or return;
-            $vendor = <$vf>;
-            close $vf;
-            chomp $vendor;
-            $vendor =~ s/^\s+|\s+$//g;  # trim leading/trailing spaces
-        }
-
-        return unless $vendor eq 'DataCore';
-
-        # Read and trim model
-        my $model_file = "$dev_path/device/model";
-        my $model = '';
-        if (-e $model_file) {
-            open my $mf, '<', $model_file or return;
-            $model = <$mf>;
-            close $mf;
-            chomp $model;
-            $model =~ s/^\s+|\s+$//g;  # trim leading/trailing spaces
-        }
-
-        return unless $model eq 'Virtual Disk';
-
-        # Check holders directory — skip if non-empty
-        my @holders = glob("$dev_path/holders/*");
-        my $has_holders = scalar(@holders);
-
-        return if $has_holders;  # Skip devices in use by dm/LVM/etc.
-
-        print "Stale device $dev_name detected (size=0, vendor='$vendor', model='$model', holders=None)\n" if $DEBUG;
-        print "Deleting stale device $dev_name\n" if $DEBUG;
-
-        run_command(["echo 1 > /sys/block/$dev_name/device/delete"], outfunc => sub {});
-    });
 }
 
 sub deactivate_storage {
@@ -861,15 +836,21 @@ sub alloc_image {
     {
         my $target = $ssy_targets[0];
         my $session = nvme_session($cache, $target);
-        push @ssy_session_list, @$session;
+        push @ssy_session_list, @$session if defined($session);
     }
     else
     {
         for (my $i = 0; $i < scalar @ssy_targets; $i++) {
             my $sessions = iscsi_session($cache, $ssy_targets[$i]);
-            push @ssy_session_list, @$sessions;
+            push @ssy_session_list, @$sessions if defined($sessions);
         }
         iscsi_session_rescan(1, @ssy_session_list) if scalar @ssy_session_list;
+    }
+
+    if (!scalar @ssy_session_list) {
+        ssy_unserve_delete_vd($vd_id, $scfg, $storeid, @host_ids);
+        die "no active " . (($scfg->{protocol} && $scfg->{protocol} eq 'nvme-tcp') ? "NVMe" : "iSCSI")
+          . " session for storage '$storeid' - check portal connectivity\n";
     }
 
     my $sleep = 0;
@@ -966,9 +947,13 @@ sub free_image {
 
     print "Free volume name : $volname\n" if $DEBUG;
 
+    my $mp_wwid;
+    my $scsi_id;
     if ($volname =~ /\d+\.\d+\.\d+\.scsi-3(\w+):\d+$/)
     {
         my $wwid = $1;
+        $scsi_id = $wwid;    # 32-hex ScsiDeviceIdString, for SCSI path cleanup
+        $mp_wwid = "3$wwid"; # multipath map WWID (SCSI-3 prefix), for local cleanup
         $vd_id = ssy_get_vd_id_from_wwid($scfg, $wwid, $storeid);
     }
     elsif ($volname =~ /^\d+\.\d+\.\d+\.(nvme-uuid\.[^:]+):/) # Get the nvme uuid here instead of getting scfg->protocol
@@ -985,7 +970,29 @@ sub free_image {
 
     print "SANsymphony VD with ID $vd_id got unserved and deleted successfully\n";
 
+    eval { run_command(['multipath', '-f', $mp_wwid], outfunc => sub {}, errfunc => sub {}); }
+        if defined($mp_wwid);
+
+    ssy_delete_scsi_paths($scsi_id) if defined($scsi_id);
+
     return undef;
+}
+
+sub ssy_delete_scsi_paths {
+    my ($scsi_id) = @_;                 # 32-hex ScsiDeviceIdString (no SCSI-3 '3')
+    my $want = lc($scsi_id // '');
+    $want =~ s/[^0-9a-f]//g;
+    return if length($want) < 16;       # guard against empty/garbage input
+
+    dir_glob_foreach('/sys/block', qr/^sd[a-z]+$/, sub {
+        my ($dev) = @_;
+        my $wwid = lc(file_read_firstline("/sys/block/$dev/device/wwid") // '');
+        $wwid =~ s/[^0-9a-f]//g;        # 'naa.60030d90...' -> '60030d90...'
+        return if index($wwid, $want) < 0;
+
+        print "Deleting stale SCSI path $dev (WWID $scsi_id)\n" if $DEBUG;
+        eval { run_command(["echo 1 > /sys/block/$dev/device/delete"], outfunc => sub {}); };
+    });
 }
 
 sub ssy_request {
@@ -1009,6 +1016,7 @@ sub ssy_request {
 
         $req->header('Content-Type' => 'application/json');
         $req->header('ServerHost' => $portal);
+        $req->header('Source' => $pluginVersion);
 
         my $encoded_pass = ssy_get_pass($storeid);
         my $password = decode_password($encoded_pass);
@@ -1705,10 +1713,10 @@ sub check_connection {
     if ($scfg->{protocol} && $scfg->{protocol} eq 'nvme-tcp') {
         return if !assert_nvme_support(1);
 
+        my $target = $ssy_targets[0]; # NVMe supports a single target
         foreach my $portal (@ssy_portals) {
-            my $res = eval { nvme_discovery($portal, $cache, $storeid) };
-            next if $@;
-            return 1 if $res && %$res;
+            my $result = nvme_test_portal($target, $portal, $cache);
+            return $result if $result;
         }
 
         return 0;
@@ -1749,7 +1757,7 @@ sub volume_resize {
         my $wwid = $1;
         $vd_id = ssy_get_vd_id_from_wwid($scfg, $wwid, $storeid);
     }
-    elsif ($volname =~ /^(nvme-uuid\.[^.]+)\..*/) # Get the nvme uuid here instead of getting scfg->protocol
+    elsif ($volname =~ /^\d+\.\d+\.\d+\.(nvme-uuid\.[^:]+):/)
     {
         my $nvmeuuid = $1;
         $vd_id = ssy_get_vd_id_from_nvmeuuid($scfg, $nvmeuuid, $storeid);
