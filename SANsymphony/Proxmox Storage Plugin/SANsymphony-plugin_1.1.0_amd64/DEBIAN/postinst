@@ -2,8 +2,6 @@
 
 set -e
 
-#DEBHELPER#
-
 case "$1" in
 	configure)
 
@@ -47,11 +45,30 @@ case "$1" in
             fi
         fi
 
-        # Reload udev rules
-        if command -v udevadm >/dev/null; then
-            echo "Reloading udev rules..."
-            udevadm control --reload-rules
-            udevadm trigger --subsystem-match=block
+        # Reload udev rules only if the DataCore rule has changed, 
+        # since reloading is slow and unnecessary when the rule is unchanged.
+        UDEV_RULE="/etc/udev/rules.d/99-datacore.rules"
+        UDEV_HASH_FILE="/var/lib/ssy-plugin/99-datacore.rules.sha256"
+
+        if [ -f "$UDEV_RULE" ] && command -v udevadm >/dev/null; then
+            new_hash="$(sha256sum "$UDEV_RULE" | awk '{print $1}')"
+            old_hash=""
+            [ -f "$UDEV_HASH_FILE" ] && old_hash="$(cat "$UDEV_HASH_FILE")"
+
+            if [ "$new_hash" != "$old_hash" ]; then
+                if [ -z "$old_hash" ]; then
+                    echo "Reloading udev rules (DataCore rule added)..."
+                else
+                    echo "Reloading udev rules (DataCore rule changed)..."
+                fi
+                udevadm control --reload-rules
+                udevadm trigger --subsystem-match=block
+
+                mkdir -p "$(dirname "$UDEV_HASH_FILE")"
+                printf '%s\n' "$new_hash" > "$UDEV_HASH_FILE"
+            else
+                echo "DataCore udev rule unchanged; skipping udev reload."
+            fi
         fi
 
         # Reload multipath maps

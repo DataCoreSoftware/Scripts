@@ -1,0 +1,26 @@
+#!/bin/bash
+set -e
+
+TMP_DIR="/var/backups/SANsymphony-Plugin-Backup"
+MULTIPATH_CONF="/etc/multipath.conf"
+
+echo "Creating ${TMP_DIR} folder to back up the configuration files..."
+mkdir -p "$TMP_DIR"
+
+# Take a one-time, dated backup of the admin's original multipath config, so
+# later upgrades never clobber it with the plugin's own previously-installed
+# config. The glob also matches a plain, undated "multipath.conf" backup
+# left over from an older version of this script, so upgrading a host that
+# already has one won't take (and overwrite the intent of) a second backup.
+shopt -s nullglob
+existing_backups=("$TMP_DIR"/multipath.conf*)
+shopt -u nullglob
+if [[ ${#existing_backups[@]} -gt 0 ]]; then
+    echo "+ Backup already exists (${existing_backups[0]}), skipping..."
+elif [[ -f "$MULTIPATH_CONF" ]]; then
+    BACKUP_FILE="$TMP_DIR/multipath.conf.$(date +%Y%m%d)"
+    echo "+ Copying ${MULTIPATH_CONF} to ${BACKUP_FILE}..."
+    cp "$MULTIPATH_CONF" "$BACKUP_FILE"
+else
+    echo "+ File ${MULTIPATH_CONF} does not exist, skipping backup..."
+fi

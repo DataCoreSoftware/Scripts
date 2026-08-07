@@ -1,0 +1,22 @@
+#!/bin/sh
+
+set -e
+
+case "$1" in
+	remove)
+        # Refuse removal while DataCore SANsymphony (ssy) storages are still
+        # configured — their storage.cfg entries would no longer load once the
+        # plugin module is gone. Only block on 'remove'; 'upgrade'/'deconfigure'
+        # must proceed (storages are expected to exist during an upgrade).
+        if [ -f /etc/pve/storage.cfg ] \
+           && grep -qE '^ssy:[[:space:]]' /etc/pve/storage.cfg; then
+            echo "ERROR: Cannot remove ssy-plugin — DataCore SANsymphony (ssy) storages are still configured:" >&2
+            grep -E '^ssy:[[:space:]]' /etc/pve/storage.cfg | awk '{print "  - " $2}' >&2
+            echo "Remove them first (e.g. 'pvesm remove <storeid>'), then remove the package." >&2
+            exit 1
+        fi
+        ;;
+
+	*)
+        ;;
+esac
