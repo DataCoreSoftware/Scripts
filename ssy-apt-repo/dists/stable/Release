@@ -1,24 +1,24 @@
-Origin: DataCore SANsymphony Repository
+Origin: DataCore Software
 Label: ssy-plugin
 Suite: stable
 Codename: stable
-Version: 1.0.3
+Version: 1.1.0
 Architectures: amd64
 Components: main
 Description: A proxmox storage plugin for DataCore SANsymphony software-defined storage
-Date: Wed, 27 May 2026 07:51:05 +0000
+Date: Fri, 31 Jul 2026 08:39:26 +0000
 MD5Sum:
- 5a194372d46bc685a0f0de36dec11fdf 512 main/binary-amd64/Packages
- 6edee09727b1be2bbfd1b9b1428e3b53 389 main/binary-amd64/Packages.gz
- 44374d7d50534c8e5b02183eaa84e3af 2065 InRelease
- 8a3f9ac7d02b08dd58715bfb9d1244fc 870 Release.gpg
+ 6436acc740271922d316db5d25e7ec87 509 main/binary-amd64/Packages
+ 6b611f9ba2bdf9621b3215e76fd954ef 382 main/binary-amd64/Packages.gz
+ 778be86b4b2de596cda08346a2b3f51d 2051 InRelease
+ d9e60513baaa918ea8cfaadf177d4edf 870 Release.gpg
 SHA1:
- b9a19f3571776dc5085cbc6fb01876d37704c963 512 main/binary-amd64/Packages
- 93d6fb0bf7b9f21c74c269760c6780afe48c2485 389 main/binary-amd64/Packages.gz
- cb32edd9530b5bf63207ec95ef8e2ebc9e764297 2065 InRelease
- 94da1d4e0a6baf030597bafeb2582296bc96da15 870 Release.gpg
+ f42aa387ce525e8f5f1da664bcd362b0c5c06b4f 509 main/binary-amd64/Packages
+ ba515ac759542d9d40908ee522bf651d8bba7cff 382 main/binary-amd64/Packages.gz
+ dcc69befffd050fbc4796718935509379a33f33c 2051 InRelease
+ 122950f017f64be003cb98e39f6d005fc7cfffd9 870 Release.gpg
 SHA256:
- a0fc52411f36901cfb8e8127504ca65462620c38a82da4451789d98baeb97b8b 512 main/binary-amd64/Packages
- 6ea6f974f6e8dfbde96fd6b8c5323a5806bf32848a2ef49efa94098e966928e8 389 main/binary-amd64/Packages.gz
- 62f2551e3e87ba70c852b39de2b6fe5f099d2a8161ff48019acc4fccadc1d429 2065 InRelease
- 10c4b251bfdfa4bb8f2eb54c1d475f272627b6bed453896d81a599adf41abfaf 870 Release.gpg
+ 26734a42b8dba868ba3ba05ce6c7bb194e3996d702972a1c5cb8a79fdc08ab23 509 main/binary-amd64/Packages
+ fd61e324e4cbaaa28634b312c3abae4f4971187f11643987623f8ae4fea9cd80 382 main/binary-amd64/Packages.gz
+ e255625bb0811e06674838d0a11832bb0a5e3146dd71c4ea49a89f0bb576ed89 2051 InRelease
+ d221b4dd06643d2994300cc3382c288a0f13ea47b1b6e4453a4ba8537a6b7e33 870 Release.gpg
