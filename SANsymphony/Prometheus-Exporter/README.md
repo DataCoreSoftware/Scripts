@@ -7,6 +7,14 @@ A PowerShell-based Prometheus exporter to collect performance and configuration 
 
 ---
 
+> ⚠️ **Superseded by the DataCore SANsymphony Prometheus Exporter (MSI).** This PowerShell script is no longer the recommended way to export SANsymphony metrics to Prometheus. Download the new native Windows-service exporter (MSI installer) from **[DataCore Downloads](https://www.datacore.com/downloads/)**.
+>
+> **This is a replacement, not an upgrade.** The MSI exporter exposes a different set of metrics under a different PromQL naming scheme (`ssv_*`) — it is not an extension of this script's `.prom` output. Existing PromQL queries and Grafana dashboards built against this script's metrics will need to be rebuilt against the new exporter's metric names; they are not compatible or drop-in.
+>
+> For more understanding about the DataCore SANsymphony Prometheus Exporter (MSI), refer to the official **[Documentation](https://docs.datacore.com/Prometheus-Exporter-WebHelp-1.0.0/prometheus-exporter/overview.htm)**.
+
+---
+
 ## 📦 Features
 
 - Collects performance data from:
