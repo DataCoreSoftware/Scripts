@@ -173,3 +173,9 @@ Local HardeningKitty module (auto-downloaded if missing)
 
 - Backup/Restore operations affect security configuration only (not a full system backup).
 - Always validate hardening changes in non-production environments before broad deployment.
+
+---
+
+## Documentation
+
+For more information, refer to the official [Operating System Hardening for SANsymphony](https://docs.datacore.com/Operating-System-Hardening-for-SANsymphony/Content/Windows-Hardening-for-SANsymphony/Help/Overview.htm) documentation.
