@@ -1,0 +1,68 @@
+#!/bin/sh
+
+set -e
+
+case "$1" in
+	remove)
+        # Disable the perf collector and clear the systemd enablement state.
+        # The unit file itself is removed by dpkg; deb-systemd-helper cleans up
+        # the symlinks it created at enable time.
+        if command -v deb-systemd-helper >/dev/null 2>&1; then
+            deb-systemd-helper disable ssy-plugin-collect.service >/dev/null 2>&1 || true
+        fi
+        [ -d /run/systemd/system ] && systemctl --system daemon-reload >/dev/null 2>&1 || true
+
+        # Byte-compiled caches under the package dir are created at runtime, so
+        # dpkg does not track them — remove them or the dirs linger. Covers both
+        # the ssy_plugin package and the vendored dependencies, at any depth.
+        if [ -d /usr/lib/ssy-plugin ]; then
+            find /usr/lib/ssy-plugin -type d -name __pycache__ -prune \
+                 -exec rm -rf {} + 2>/dev/null || true
+        fi
+        rmdir --ignore-fail-on-non-empty /usr/lib/ssy-plugin/ssy_plugin 2>/dev/null || true
+        rmdir --ignore-fail-on-non-empty /usr/lib/ssy-plugin/vendor 2>/dev/null || true
+        rmdir --ignore-fail-on-non-empty /usr/lib/ssy-plugin 2>/dev/null || true
+        ;;
+
+	purge)
+        BACKUP_DIR="/var/backups/SANsymphony-Plugin-Backup"
+
+        # Fully remove the collector's systemd enablement state.
+        if command -v deb-systemd-helper >/dev/null 2>&1; then
+            deb-systemd-helper purge ssy-plugin-collect.service >/dev/null 2>&1 || true
+            deb-systemd-helper unmask ssy-plugin-collect.service >/dev/null 2>&1 || true
+        fi
+
+        # Drop the perf history written by the TUI / collector.
+        rm -rf /var/lib/ssy-plugin
+
+        # Logs are an audit trail: dropped only on purge, never on remove. If a
+        # site would rather the trail outlived an uninstall, delete this line --
+        # that is a policy call, not a technical one.
+        rm -rf /var/log/ssy-plugin
+
+        # Restore the admin's pre-install multipath.conf, if we backed one
+        # up. The backup filename is dated (multipath.conf.YYYYMMDD), or, on
+        # a host upgraded from an older plugin version, the plain undated
+        # "multipath.conf" — match either.
+        backup_file=""
+        for f in "$BACKUP_DIR"/multipath.conf*; do
+            [ -f "$f" ] && { backup_file="$f"; break; }
+        done
+
+        if [ -n "$backup_file" ]; then
+            echo "Restoring original /etc/multipath.conf from backup..."
+            cp "$backup_file" /etc/multipath.conf
+        fi
+
+        # Drop the recorded udev-rule hash so a future install re-triggers a reload.
+        rm -f /var/lib/ssy-plugin/99-datacore.rules.sha256
+        rmdir --ignore-fail-on-non-empty /var/lib/ssy-plugin 2>/dev/null || true
+
+        # Remove our backup dir last (after the restore above).
+        rm -rf "$BACKUP_DIR"
+        ;;
+
+	*)
+		;;
+esac

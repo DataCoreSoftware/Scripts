@@ -1,0 +1,41 @@
+# ssy-plugin log rotation — install as /etc/logrotate.d/ssy-plugin (mode 0644).
+#
+# Installing this file is also the signal that makes ssy-plugin switch from its
+# own in-process RotatingFileHandler to WatchedFileHandler, so the two never
+# rotate the same file (see logsetup.rotation_is_external / _file_handler).
+# If you remove it, ssy-plugin goes back to rotating the file itself.
+#
+# `create 0600 root root` is required, not cosmetic: this release is root-only,
+# and without it logrotate would create the new file with logrotate's default
+# mode and the log would become group/world readable. It carries vDisk
+# captions, NAAs, VM ids and node names.
+#
+# No `copytruncate`: WatchedFileHandler reopens the path when the inode
+# changes, which is the cheaper and race-free half of the deal. copytruncate
+# would risk losing lines written between the copy and the truncate.
+
+/var/log/ssy-plugin/ssy-plugin.log {
+    weekly
+    # Rotate on size too, not only on the calendar. `weekly` alone puts NO
+    # ceiling on the active file, so one busy week — a migration, or a session
+    # left running with SSY_PLUGIN_LOG_LEVEL=debug — could grow it without bound.
+    # 4M matches the in-process RotatingFileHandler cap, so the two rotation
+    # modes bound the file the same way.
+    #
+    # NOTE: maxsize is only CHECKED when logrotate runs, which on a stock
+    # Debian is once a day via the logrotate.timer. So this is a ceiling the
+    # file returns to daily, not one it is held under continuously -- a very
+    # busy debug session can exceed 4M until the next run. That is accepted:
+    # the alternative is an hourly timer for one file.
+    maxsize 4M
+    rotate 8
+    missingok
+    notifempty
+    compress
+    delaycompress
+    create 0600 root root
+}
+
+# The collector logs to the journal via systemd (SyslogIdentifier in
+# ssy-plugin-collect.service), so it needs no entry here — journald caps its own
+# storage. See logging.md §5 "Multi-writer hazard".

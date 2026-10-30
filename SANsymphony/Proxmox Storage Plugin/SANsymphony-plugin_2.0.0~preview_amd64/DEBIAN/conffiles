@@ -1,0 +1,2 @@
+/etc/udev/rules.d/99-datacore.rules
+/etc/logrotate.d/ssy-plugin
