@@ -726,13 +726,3 @@ Typing `ssy-plugin` now opens the terminal console. Scripts that still pass argu
 
 Yes. Use `pvesm add ssy …` ([Using `pvesm add`](#using-pvesm-add)) or the non-interactive `ssy-plugin-old` CLI (`ssy-plugin-old -h` for its options).
 </details>
-
----
-
-## 📄 License
-
-Released under the [GNU Affero General Public License v3.0](LICENSE).
-
-<div align="center">
-<sub>© 1998–2026 DataCore Software · SANsymphony Storage Plugin for Proxmox VE</sub>
-</div>
