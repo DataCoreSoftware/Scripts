@@ -125,32 +125,6 @@ One `.deb` holds everything, so all the pieces are installed and upgraded togeth
 
 ---
 
-## 🚀 Quick start
-
-Already know Proxmox and SANsymphony? This is the whole journey for an iSCSI setup:
-
-```bash
-# 1. On EVERY node: install prerequisites (NVMe/TCP users: see Prerequisites)
-apt install open-iscsi multipath-tools jq
-
-# 2. On EVERY node: download and install the preview package (.deb only)
-wget https://github.com/DataCoreSoftware/Scripts/releases/download/SSY_PVE_Plugin/SANsymphony-plugin_2.0.0.preview_amd64.deb
-dpkg -i SANsymphony-plugin_2.0.0.preview_amd64.deb
-
-# 3. On ONE node: open the console and choose "Add SSY storage"
-ssy-plugin
-```
-
-Now create a VM in the Proxmox web UI and pick your SSY storage for its disk. 🎉
-
-```text
-Prepare ──► Install ──► Add storage ──► Run VMs ──► Protect
-template,   on every    once per        disks,      CDP, snapshots,
-packages    node        cluster         resize      recovery
-```
-
----
-
 ## ✅ Prerequisites
 
 Have these in place **before** you install. The plugin does not install the transport packages for you.
@@ -196,13 +170,11 @@ The package is **self-contained**: the console's Python libraries are bundled in
 
 ```bash
 # 1. Download the package
-wget https://github.com/DataCoreSoftware/Scripts/releases/download/SSY_PVE_Plugin/SANsymphony-plugin_2.0.0~preview_amd64.deb
+wget https://github.com/DataCoreSoftware/Scripts/releases/download/SSY_PVE_Plugin/SANsymphony-plugin_2.0.0.preview_amd64.deb
 
 # 2. Install it
-dpkg -i SANsymphony-plugin_2.0.0~preview_amd64.deb
+dpkg -i SANsymphony-plugin_2.0.0.preview_amd64.deb
 ```
-
-No internet access on the node? Download the file on another machine and copy it over, for example with `scp SANsymphony-plugin_2.0.0~preview_amd64.deb root@<node>:`.
 
 ### Verify the installation
 
@@ -210,8 +182,6 @@ No internet access on the node? Download the file on another machine and copy it
 dpkg -l | grep ssy-plugin
 ssy-plugin --version          # 2.0.0~preview
 ```
-
-`dpkg -s ssy-plugin` also shows a **PREVIEW PRE-RELEASE** notice in the package description.
 
 ### What the installer changes on each node
 
