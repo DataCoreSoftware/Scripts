@@ -5,11 +5,14 @@ use warnings;
 use JSON;
 use LWP::UserAgent;
 use HTTP::Request;
+use PVE::INotify;
 use PVE::Tools qw(run_command file_read_firstline trim dir_glob_regex dir_glob_foreach $IPV4RE $IPV6RE);
 use PVE::Storage::ISCSIPlugin;
 use base qw(PVE::Storage::Plugin);
 use MIME::Base64 qw(encode_base64 decode_base64);
 use Data::Dumper;
+use Time::HiRes qw(gettimeofday tv_interval);
+use PVE::SafeSyslog;
 
 # Example: 192.168.122.252:3260,1 iqn.2003-01.org.linux-iscsi.proxmox-nfs.x8664:sn.00567885ba8f
 my $ISCSI_TARGET_RE = qr/^((?:$IPV4RE|\[$IPV6RE\]):\d+)\,\S+\s+(\S+)\s*$/;
@@ -17,7 +20,26 @@ my $rescan_filename = "/var/run/ssy-iscsi-rescan.lock";
 my $vd_id;
 my $DEBUG = 0;
 my $default_protocol = 'iscsi';
-my $pluginVersion = "ProxmoxPlugin_1.1.0";
+my $pluginVersion = "ProxmoxPlugin_dev";  # stamped to VERSION at .deb build (build-deb.sh)
+
+# One fixed prefix on everything we emit. Proxmox support redirects third-party
+# plugin problems to the vendor, so a customer's journal export has to be
+# greppable back to us: our lines surface as `pvedaemon[pid]:` or
+# `pvestatd[pid]:`, and the PVE 9 System Log panel has no free-text search, so
+# this prefix is the only handle an operator has on them.
+my $LOG_PREFIX = 'SANsymphonyPlugin';
+
+# Rendered into the message as SANsymphonyPlugin[WARNING]: ... because the
+# syslog PRIORITY is a journald FIELD, and journalctl's default output does not
+# print it -- so every line looked identical regardless of severity unless the
+# reader knew to pass -p or -o json. Spelt the same as the TUI's file sink
+# (%(levelname)s), so one support engineer reading both sees one vocabulary.
+my %LEVEL_LABEL = (
+    debug   => 'DEBUG',
+    info    => 'INFO',
+    warning => 'WARNING',
+    err     => 'ERROR',
+);
 
 my $ISCSIADM = '/usr/bin/iscsiadm';
 my $found_iscsi_support;
@@ -25,9 +47,121 @@ my $NVME_CLI = '/usr/sbin/nvme';
 my $found_nvme_support;
 my $MULTIPATH_CLI = '/usr/sbin/multipath';
 
+# ---------------------------------------------------------------------------
+# Logging
+#
+# Everything goes through ssy_log so there is exactly one place that knows the
+# prefix, the severity label, the escaping rule, and which levels also reach
+# the task log. NEVER call openlog() or initlog() from here:
+# syslog identity is process-wide, and opening it ourselves would rename
+# pvedaemon's own lines. With no openlog of our own, Sys::Syslog rides whatever
+# identity the calling daemon already established (pvedaemon/pvestatd both call
+# PVE::SafeSyslog::initlog at startup), and falls back to basename($0) under
+# `pvesm`/`qm`. Either way we stay a guest in someone else's log stream.
+#
+# WHY THE PREFIX. Because we are a guest: our lines land in pvedaemon's and
+# pvestatd's streams, and the PVE System Log panel has no free-text search, so
+# the identifier is the only handle an operator has on them.
+#
+# The comparison, checked on a PVE 8 node rather than assumed -- an earlier
+# review asserted that upstream ISCSIPlugin and LVMPlugin call syslog, and they
+# do not:
+#
+#   * NO upstream storage plugin calls syslog. The single occurrence across
+#     /usr/share/perl5/PVE/Storage/*.pm is a COMMENTED-OUT line in BTRFSPlugin.
+#   * ZFSPlugin -- not LVMPlugin -- is the one that uses log_warn, one call
+#     site, via PVE::RESTEnvironment.
+#   * Everything else is bare warn and die: ~70 warns against ~408 dies across
+#     the whole plugin set.
+#
+# So upstream offers no convention to follow and no precedent to point at; the
+# third-party plugins that log deliberately (Pure, StorPool) prefix their
+# syslog lines, which is the practice this follows. Reported in review, not
+# verified here -- neither is installed on this node.
+# ---------------------------------------------------------------------------
+
+# Defensive only. Nothing currently handed to ssy_log carries a credential --
+# ssy_request deliberately logs method/endpoint/portal/status/ms and never the
+# HTTP::Request, which holds the Basic auth header. But `ssy_debug` is now
+# switchable at runtime BY A CUSTOMER, which makes the debug path reachable in
+# production, and a future call site that passes a config hash or a Dumper of
+# one should not be the thing that learns this lesson.
+sub ssy_redact {
+    my ($text) = @_;
+    return $text if !defined($text);
+    $text =~ s/((?:ssy)?password\s*(?:=>|[=:])\s*['"]?)[^'"\s,}]+/$1***/gi;
+    $text =~ s/(--?[\w-]*password[=\s]+)\S+/$1***/gi;
+    $text =~ s/(Authorization\s*:\s*Basic\s+)\S+/$1***/gi;
+    return $text;
+}
+
+sub ssy_log {
+    my ($level, $fmt, @args) = @_;
+
+    my $msg = @args ? sprintf($fmt, @args) : $fmt;
+    $msg = ssy_redact($msg);
+    $msg =~ s/\s+\z//;
+
+    # "%s" rather than passing $msg as the format: Sys::Syslog::syslog treats
+    # its first argument as a printf format, and a vDisk caption or a REST
+    # error body containing a literal % would otherwise be mangled (or eat the
+    # next argument). %m in particular expands to errno.
+    # ${LOG_PREFIX} braced, NOT "$LOG_PREFIX[...]": Perl parses that as a
+    # subscript into @LOG_PREFIX and would emit an empty prefix.
+    my $tag = "${LOG_PREFIX}[" . ($LEVEL_LABEL{$level} // uc($level)) . "]";
+
+    syslog($level, "%s", "$tag: $msg");
+
+    # ERR and WARNING ALSO go to stderr. PVE's worker captures stderr into the
+    # task log and counts warnings into a task's result line, so without this a
+    # failed disk operation left the operator staring at a task log that says
+    # nothing while the detail sat in the journal they never thought to read.
+    #
+    # This is the ONLY place that decision is made. Call sites used to write
+    # their own `warn` next to an ssy_log call -- two hand-maintained strings
+    # per event, which had already drifted apart in wording, and only the
+    # syslog half went through ssy_redact.
+    #
+    # INFO and DEBUG stay syslog-only: they are the per-operation narrative,
+    # and pushing them to stderr would put routine lines in every task log.
+    #
+    # Precedent, not invention: PVE::RESTEnvironment::log_warn does the same
+    # pair (syslog plus STDERR, with the same "%s" guard). We do not call it
+    # because inside a task it routes to the task ONLY, dropping the syslog
+    # line that makes our events greppable across daemons.
+    #
+    # The trailing \n matters: without it Perl appends "at <file> line N.",
+    # pointing inside this sub rather than at the caller.
+    warn "$tag: $msg\n" if $level eq 'err' || $level eq 'warning';
+}
+
+# Resolve the debug switch. ONE source: the storage.cfg `ssy_debug` option.
+#
+# There used to be a second switch, a marker file at /etc/ssy-plugin/debug,
+# whose job was node-local scope -- storage.cfg lives in /etc/pve, so turning
+# tracing on turns it on for every node in the cluster. That was dropped
+# deliberately: two switches meant two places to look when tracing was on and
+# nobody remembered enabling it, and the file needed an mkdir plus a touch that
+# no package step created. Cluster-wide is the accepted cost; `pvesm set <id>
+# --ssy_debug 1` is now the whole interface, and it is the one a customer can
+# be talked through over the phone and read back with
+# `pvesh get /storage/<id>` (there is no `pvesm config`).
+#
+# Called at each public entry point, where $scfg is in scope. $DEBUG is a
+# file-scoped lexical, so it STAYS SET for the life of the worker process --
+# that is what covers the helpers which never receive an $scfg
+# (ssy_delete_scsi_paths, load_stable_nvme_paths, nvme_tcp_device_list,
+# assert_*_support). Every one of them is reached through an entry point that
+# has already run this, so they trace with the storage they were called for.
+sub ssy_debug_enabled {
+    my ($scfg) = @_;
+
+    return $scfg && $scfg->{ssy_debug} ? 1 : 0;
+}
+
 sub api {
     my $minver = 3;
-    my $maxver = 15;
+    my $maxver = 16;
 
     my $apiver;
     eval {
@@ -102,6 +236,14 @@ sub properties {
             default     => $default_protocol,
             enum        => [ $default_protocol, 'nvme-tcp'],
         },
+        ssy_debug => {
+            description => "Log verbose plugin tracing to syslog. Note that "
+                         . "storage.cfg lives in /etc/pve, so this turns "
+                         . "tracing on for this storage on EVERY node in the "
+                         . "cluster, not just the one you run pvesm on.",
+            type        => 'boolean',
+            default     => 0,
+        },
     };
 }
 
@@ -118,6 +260,17 @@ sub options {
         disable => { optional => 1},
         content => { optional => 1},
         protocol  => { optional => 1 },
+        # `ssy_debug`, not `debug`: PVE::Storage::Plugin->init() runs without
+        # property_isolation, so SectionConfig merges every plugin's
+        # properties() into ONE global propertyList and dies with
+        # "duplicate property" on a clash. That die happens at module load, so
+        # a second plugin declaring a bare `debug` would break EVERY storage on
+        # the node, not just ours. `debug` is an obvious name for another
+        # vendor to pick; the prefix costs nothing and removes the collision.
+        #
+        # optional, not fixed: a customer must be able to turn tracing on with
+        # `pvesm set <id> --ssy_debug 1` without recreating the storage.
+        ssy_debug => { optional => 1 },
     };
 }
 
@@ -210,15 +363,15 @@ my sub assert_iscsi_support {
     my $found_iscsi_adm_exe = -x $ISCSIADM;
 
     if (!$found_iscsi_adm_exe) {
-        die "error: no iscsi support - please install open-iscsi\n" if !$noerr;
-        warn "warning: no iscsi support - please install open-iscsi\n";
+        die "$LOG_PREFIX: no iscsi support - please install open-iscsi\n" if !$noerr;
+        ssy_log('warning', "no iscsi support - please install open-iscsi");
     }
 
     my $found_multipath_exe = -x $MULTIPATH_CLI;
 
     if (!$found_multipath_exe) {
-        die "error: no multipath support - please install multipath-tools\n" if !$noerr;
-        warn "warning: no multipath support - please install multipath-tools\n";
+        die "$LOG_PREFIX: no multipath support - please install multipath-tools\n" if !$noerr;
+        ssy_log('warning', "no multipath support - please install multipath-tools");
     }
 
     $found_iscsi_support = $found_iscsi_adm_exe && $found_multipath_exe;
@@ -235,8 +388,8 @@ sub assert_nvme_support {
     $found_nvme_support = -x $NVME_CLI;
 
     if (!$found_nvme_support) {
-        die "error: no nvme support - please install nvme-cli\n" if !$noerr;
-        warn "warning: no nvme support - please install nvme-cli\n";
+        die "$LOG_PREFIX: no nvme support - please install nvme-cli\n" if !$noerr;
+        ssy_log('warning', "no nvme support - please install nvme-cli");
     }
 
     return $found_nvme_support;
@@ -244,6 +397,11 @@ sub assert_nvme_support {
 
 sub status {
     my ($class, $storeid, $scfg, $cache) = @_;
+    $DEBUG = ssy_debug_enabled($scfg);
+    # pvestatd calls this every few seconds, so it stays off the journal unless
+    # tracing is explicitly on -- an INFO line here would bury every real
+    # operation within minutes.
+    ssy_log('debug', "status poll on '%s'", $storeid) if $DEBUG;
 
     my $active;
 
@@ -283,12 +441,14 @@ sub iscsi_discovery {
     
     if ($api_version < 11) {
         if (!PVE::Storage::ISCSIPlugin::iscsi_test_portal($portal)) {
-            print "Portal $portal is unreachable - Portal test failed on '$storeid' storage.\n";
+            print "$LOG_PREFIX: Portal $portal is unreachable - Portal test failed on '$storeid' storage.\n";
+            ssy_log('warning', "portal %s unreachable on '%s'", $portal, $storeid);
             return undef;
         }
     } else {
         if (!PVE::Storage::ISCSIPlugin::iscsi_test_portal($target_in, $portal, $cache)) {
-            print "Portal $portal is unreachable - Portal test failed on '$storeid' storage.\n";
+            print "$LOG_PREFIX: Portal $portal is unreachable - Portal test failed on '$storeid' storage.\n";
+            ssy_log('warning', "portal %s unreachable on '%s'", $portal, $storeid);
             return undef;
         }
     } 
@@ -336,7 +496,11 @@ sub iscsi_login {
             ];
             run_command($cmd);
         };
-        warn "Failed to set iSCSI node setting '$key' to '$value' for target '$target': $@\n" if $@;
+        if ($@) {
+            my $err = $@; $err =~ s/\s+\z//;
+            ssy_log('warning', "failed to set iSCSI node setting '%s' to '%s' "
+                             . "for target '%s': %s", $key, $value, $target, $err);
+        }
     }
 
     run_command([$ISCSIADM, '--mode', 'node', '--targetname',  $target, '--login']);
@@ -372,7 +536,11 @@ sub iscsi_session_rescan {
     foreach my $session (@session_list) {
         my $cmd = [$ISCSIADM, '--mode', 'session', '--sid', $session->{session_id}, '--rescan'];
         eval { run_command($cmd, outfunc => sub {}); };
-        warn $@ if $@;
+        if ($@) {
+            my $err = $@; $err =~ s/\s+\z//;
+            ssy_log('warning', "iSCSI rescan of session %s failed: %s",
+                    $session->{session_id}, $err);
+        }
     }
 }
 
@@ -412,7 +580,8 @@ sub nvme_discovery {
     assert_nvme_support();
 
     if (!nvme_test_portal($target_in, $portal, $cache)) {
-        print "Portal $portal is unreachable - Portal test failed on '$storeid' storage.\n";
+        print "$LOG_PREFIX: Portal $portal is unreachable - Portal test failed on '$storeid' storage.\n";
+        ssy_log('warning', "portal %s unreachable on '%s'", $portal, $storeid);
         return undef;
     }
 
@@ -547,6 +716,15 @@ sub nvme_test_portal {
 
 sub activate_storage {
     my ($class, $storeid, $scfg, $cache) = @_;
+    $DEBUG = ssy_debug_enabled($scfg);
+    # DEBUG, not INFO: pvestatd re-enters this every few seconds per storage
+    # (PVE::Storage's $cache->{activated} guard is per call chain, not per
+    # process), so an INFO line here would bury every real operation within
+    # minutes. The state CHANGES -- an actual iSCSI/NVMe login -- are logged at
+    # INFO where they happen, below.
+    ssy_log('debug', "activate_storage '%s' (protocol %s, portals %s)",
+            $storeid, $scfg->{protocol} || $default_protocol,
+            $scfg->{portals} // '-') if $DEBUG;
 
     #Set default protocol as iscsi if not defined.
     $scfg->{protocol} = 'iscsi' if !defined($scfg->{protocol}) || $scfg->{protocol} eq '';
@@ -572,7 +750,7 @@ sub activate_nvme_storage {
     my @ssy_targets = split(/\s*,\s*/, $scfg->{targets});
 
     if (scalar @ssy_targets > 1) {
-        die "Only one NVMe target is supported, but multiple targets were configured: '" . $scfg->{targets} . "'.\n";
+        die "$LOG_PREFIX: Only one NVMe target is supported, but multiple targets were configured: '" . $scfg->{targets} . "'.\n";
     }
 
     for (my $i = 0; $i < scalar @ssy_portals; $i++) {
@@ -588,8 +766,16 @@ sub activate_nvme_storage {
         }
 
         if ($do_login) {
+            ssy_log('info', "NVMe login to target %s via portal %s on '%s'",
+                    $ssy_targets[0], $ssy_portals[$i], $storeid);
             eval { nvme_login($ssy_targets[0], $ssy_portals[$i], $cache, $storeid); };
-            warn $@ if $@;
+            if ($@) {
+                my $err = $@; $err =~ s/\s+\z//;
+                ssy_log('warning', "NVMe login to target %s via portal %s "
+                                 . "failed on '%s': %s -- continuing with the "
+                                 . "remaining portals",
+                        $ssy_targets[0], $ssy_portals[$i], $storeid, $err);
+            }
         } else {
             push @ssy_session_list, @$sessions;
         }
@@ -607,7 +793,7 @@ sub activate_iscsi_storage {
     my @ssy_targets = split(/\s*,\s*/, $scfg->{targets});
 
     if (scalar @ssy_portals != scalar @ssy_targets) {
-        die "Number of portals and targets must be equal";
+        die "$LOG_PREFIX: Number of portals and targets must be equal";
     }
     
     for (my $i = 0; $i < scalar @ssy_portals; $i++) {
@@ -623,8 +809,16 @@ sub activate_iscsi_storage {
         }
 
         if ($do_login) {
+            ssy_log('info', "iSCSI login to target %s via portal %s on '%s'",
+                    $ssy_targets[$i], $ssy_portals[$i], $storeid);
             eval { iscsi_login($ssy_targets[$i], $ssy_portals[$i], $cache, $storeid); };
-            warn $@ if $@;
+            if ($@) {
+                my $err = $@; $err =~ s/\s+\z//;
+                ssy_log('warning', "iSCSI login to target %s via portal %s "
+                                 . "failed on '%s': %s -- continuing with the "
+                                 . "remaining portals",
+                        $ssy_targets[$i], $ssy_portals[$i], $storeid, $err);
+            }
         } else {
             push @ssy_session_list, @$sessions;
         }
@@ -635,6 +829,7 @@ sub activate_iscsi_storage {
 
 sub deactivate_storage {
     my ($class, $storeid, $scfg, $cache) = @_;
+    $DEBUG = ssy_debug_enabled($scfg);
     print "Debug :: PVE::Storage::Custom::SANsymphonyPlugin::sub::deactivate_storage\n" if $DEBUG;
     
     if ($scfg->{protocol} && $scfg->{protocol} eq 'nvme-tcp')
@@ -645,7 +840,8 @@ sub deactivate_storage {
         my $target = $ssy_targets[0];
         if (defined(nvme_session($cache, $target))) {
             nvme_logout($target);
-            print "SANsymphonyPlugin - logging out from NVMe target: $target";
+            print "$LOG_PREFIX: logging out from NVMe target: $target\n";
+            ssy_log('info', "logging out from NVMe target %s", $target);
         }
     }
     else
@@ -656,7 +852,8 @@ sub deactivate_storage {
         foreach my $target (@ssy_targets){
             if (defined(iscsi_session($cache, $target))) {
                 iscsi_logout($target);
-                print "SANsymphonyPlugin - logging out from iSCSI target: $target";
+                print "$LOG_PREFIX: logging out from iSCSI target: $target\n";
+                ssy_log('info', "logging out from iSCSI target %s", $target);
             }
         }
     }
@@ -687,7 +884,7 @@ my $udev_query_path = sub {
 
     # only accept device names (see `man udevadm`)
     ($dev) = $dev =~ m!^(/dev/.+)$!; # untaint
-    die "invalid device for udevadm path query\n" if !defined($dev);
+    die "$LOG_PREFIX: invalid device for udevadm path query\n" if !defined($dev);
 
     my $device_path;
     my $cmd = [
@@ -701,10 +898,10 @@ my $udev_query_path = sub {
 	    $device_path = shift;
 	});
     };
-    die "failed to query device path for '$dev': $@\n" if $@;
+    die "$LOG_PREFIX: failed to query device path for '$dev': $@\n" if $@;
 
     ($device_path) = $device_path =~ m!^(/devices/.+)$!; # untaint
-    die "invalid resolved device path\n" if !defined($device_path);
+    die "$LOG_PREFIX: invalid resolved device path\n" if !defined($device_path);
 
     return $device_path;
 };
@@ -741,15 +938,16 @@ $resolve_virtual_devices = sub {
 
 sub activate_volume {
     my ($class, $storeid, $scfg, $volname, $snapname, $cache) = @_;
+    $DEBUG = ssy_debug_enabled($scfg);
 
     print "Debug :: PVE::Storage::Custom::SANsymphonyPlugin::sub::activate_volume\n" if $DEBUG;
     
     my $path = $class->filesystem_path($scfg, $volname, $snapname);
     my $real_path = Cwd::realpath($path);
-    die "failed to get realpath for '$path': $!\n" if !$real_path;
+    die "$LOG_PREFIX: failed to get realpath for '$path': $!\n" if !$real_path;
     # in case $path does not exist or is not a symlink, check if the returned
     # $real_path is a block device
-    die "resolved realpath '$real_path' is not a block device\n" if ! -b $real_path;
+    die "$LOG_PREFIX: resolved realpath '$real_path' is not a block device\n" if ! -b $real_path;
 
     my $device_path = $udev_query_path->($real_path);
     my $resolved_paths = $resolve_virtual_devices->($device_path);
@@ -770,7 +968,7 @@ sub activate_volume {
             my $found = $check_devices_part_of_target->($resolved_paths, $target);
             return if $found;
         }
-        die "volume '$volname' is not part of any configured iSCSI target\n";
+        die "$LOG_PREFIX: volume '$volname' is not part of any configured iSCSI target\n";
     }
     
 }
@@ -779,7 +977,7 @@ sub wwn_to_nvme_uuid {
     my ($wwn) = @_;
     $wwn =~ s/[^0-9a-fA-F]//g;
 
-    die "WWN must be 32 hex chars\n"
+    die "$LOG_PREFIX: WWN must be 32 hex chars\n"
         unless length($wwn) == 32;
 
     my @bytes = map { hex($_) } ($wwn =~ /(..)/g);
@@ -795,6 +993,10 @@ sub wwn_to_nvme_uuid {
 
 sub alloc_image {
     my ($class, $storeid, $scfg, $vmid, $fmt, $name, $size) = @_;
+    $DEBUG = ssy_debug_enabled($scfg);
+    ssy_log('info', "alloc_image: VM %s wants %s KiB on '%s' (protocol %s)",
+            $vmid // '-', $size, $storeid,
+            $scfg->{protocol} || $default_protocol);
     my $ScsiDeviceIdString;
     my $cache = {};
     my @ssy_session_list;
@@ -818,17 +1020,23 @@ sub alloc_image {
     if (($scfg->{protocol} && $scfg->{protocol} eq 'nvme-tcp' && !$nvme_enabled) ||
         ($scfg->{protocol} && $scfg->{protocol} eq 'iscsi' && $nvme_enabled))
     {
-        die "The specified VD template '$scfg->{vdTemplateName}' has '$vdt_protocol' protocol which is not maching with the storage class '$storeid' [protocol: '$scfg->{protocol}']\n";
+        die "$LOG_PREFIX: The specified VD template '$scfg->{vdTemplateName}' has '$vdt_protocol' protocol which does not match the storage class '$storeid' [protocol: '$scfg->{protocol}']. Re-add the storage class with a VD template that uses '$scfg->{protocol}'\n";
     }
+
+    # Resolve the hosts first: failing after the VD exists would leave an orphan on the SAN
+    my @host_ids = ssy_get_host_ids($scfg, $storeid);
 
     ($vd_id, $vd_name, $ScsiDeviceIdString) = ssy_vd_from_vdt($scfg, $storeid, $size_GiB, $vmid, $name);
 
-    my @host_ids = ssy_get_host_ids($scfg, $storeid);
     my $lun  = ssy_get_lun($scfg, $storeid, $vd_id);
 
     foreach my $host_id (@host_ids){
         ssy_serve_vd($scfg, $storeid, $host_id, $vd_id, $lun);
     }
+
+    # A VM with 2+ VDs gets one VD group; a group failure must never fail the allocation.
+    eval { ssy_ensure_vd_group($class, $scfg, $storeid, $vmid, $vd_id); };
+    ssy_log('warning', "Could not group the VDs of VM %s: %s", $vmid, $@) if $@;
 
     my @ssy_targets = split(/\s*,\s*/, $scfg->{targets});
 
@@ -849,12 +1057,12 @@ sub alloc_image {
 
     if (!scalar @ssy_session_list) {
         ssy_unserve_delete_vd($vd_id, $scfg, $storeid, @host_ids);
-        die "no active " . (($scfg->{protocol} && $scfg->{protocol} eq 'nvme-tcp') ? "NVMe" : "iSCSI")
+        die "$LOG_PREFIX: no active " . (($scfg->{protocol} && $scfg->{protocol} eq 'nvme-tcp') ? "NVMe" : "iSCSI")
           . " session for storage '$storeid' - check portal connectivity\n";
     }
 
     my $sleep = 0;
-    print "Waiting for SANsymphony VD\n";
+    print "$LOG_PREFIX: Waiting for SANsymphony VD\n";
     scan:
 
     my $stabledir = "/dev/disk/by-id";
@@ -934,15 +1142,19 @@ sub alloc_image {
         goto scan;
     }
     
-    print "Unable to allocate the disk so deleteing the created disk.";
+    print "$LOG_PREFIX: unable to allocate the disk - deleting the vDisk that was created\n";
+    ssy_log('err', "alloc_image: device for vDisk %s did not appear within "
+                 . "%ds - rolling back (unserve + delete)", $vd_id, $sleep);
 
     ssy_unserve_delete_vd($vd_id, $scfg, $storeid, @host_ids);
 
-    die "ERROR on image allocation";
+    ssy_log('err', "alloc_image failed on '%s' for VM %s", $storeid, $vmid);
+    die "$LOG_PREFIX: ERROR on image allocation\n";
 }
 
 sub free_image {
     my ($class, $storeid, $scfg, $volname, $isBase) = @_;
+    $DEBUG = ssy_debug_enabled($scfg);
     my $vd_id = undef;
 
     print "Free volume name : $volname\n" if $DEBUG;
@@ -962,13 +1174,75 @@ sub free_image {
         $vd_id = ssy_get_vd_id_from_nvmeuuid($scfg, $nvmeuuid, $storeid);
     }
 
-    return undef if $vd_id eq 0 || undef;
+    # Was `return undef if $vd_id eq 0 || undef;` -- three problems: `eq 0` is a
+    # string comparison that warns under `use warnings` when $vd_id is undef
+    # (the case it exists to catch), the `|| undef` half is a no-op, and the
+    # whole thing returned silently. A delete that quietly does nothing is the
+    # worst outcome here: PVE goes on to drop the disk from the VM config while
+    # the vDisk stays served on the SAN, so the orphan is only found much later.
+    if (!defined($vd_id) || !$vd_id) {
+        ssy_log('warning', "free_image('%s') on '%s': no SANsymphony vDisk "
+                         . "found for that volume -- nothing unserved or "
+                         . "deleted; check for an orphaned vDisk on the SAN",
+                $volname, $storeid);
+        return undef;
+    }
+
+    ssy_log('info', "free_image: unserving and deleting vDisk %s ('%s' on '%s')",
+            $vd_id, $volname, $storeid);
 
     my @host_ids = ssy_get_host_ids($scfg, $storeid);
 
+    # the group lookup must never stop the disk from being freed
+    my $group_id;
+    eval {
+        my ($vd) = grep { lc($_->{Id}) eq lc($vd_id) } @{ ssy_get_vds($scfg, $storeid) };
+        $group_id = $vd->{VirtualDiskGroupId} if $vd;
+    };
+    ssy_log('warning', "Could not read the VD group of VD %s: %s", $vd_id, $@) if $@;
+
     ssy_unserve_delete_vd($vd_id, $scfg, $storeid, @host_ids);
 
-    print "SANsymphony VD with ID $vd_id got unserved and deleted successfully\n";
+    print "$LOG_PREFIX: SANsymphony VD with ID $vd_id got unserved and deleted successfully\n";
+    ssy_log('info', "vDisk %s unserved and deleted successfully", $vd_id);
+
+    # drop the VM's VD group once its last VD is gone
+    if ($group_id) {
+        eval {
+            # DataCore destroys the snapshots and rollbacks of a VD group when
+            # the group is deleted, so keep the group while a snapshot or
+            # rollback group under it still has member vDisks. But DataCore
+            # removes a deleted VD's own snapshots a few seconds AFTER the
+            # delete returns (seen live: ~20 s), so look again before giving
+            # up: keeping the group on the first look leaked it for good.
+            # The REST list can still show the VD just deleted: leave it out.
+            # Empty shells DataCore keeps listed hold nothing, so they do not
+            # count. Fail CLOSED: a record without ParentGroupId is treated
+            # as possibly ours while it has members.
+            my ($left, $kept) = (0, 0);
+            for my $try (1 .. 10) {
+                my $now = ssy_get_vds($scfg, $storeid);
+                $left = grep { lc($_->{Id}) ne lc($vd_id) && lc($_->{VirtualDiskGroupId} // '') eq lc($group_id) } @$now;
+                last if $left;
+                $kept = 0;
+                foreach my $kind ('snapshotgroups', 'rollbackgroups') {
+                    my $groups = ssy_request("GET $kind", $scfg, $storeid, 'GET', "1.0/$kind");
+                    foreach my $g (@$groups) {
+                        # (null / empty counts as missing, not as "someone else's")
+                        next if ($g->{ParentGroupId} // '') ne ''
+                                && lc($g->{ParentGroupId}) ne lc($group_id);
+                        next if !defined($g->{Id});
+                        $kept ||= grep { lc($_->{Id}) ne lc($vd_id) && lc($_->{VirtualDiskGroupId} // '') eq lc($g->{Id}) } @$now;
+                    }
+                }
+                last if !$kept;
+                sleep 3 if $try < 10;
+            }
+            ssy_log('info', "Keeping VD group %s: snapshots or rollbacks still depend on it", $group_id) if !$left && $kept;
+            ssy_request('DELETE VD Group', $scfg, $storeid, 'DELETE', "1.0/virtualdiskgroups/$group_id") if !$left && !$kept;
+        };
+        ssy_log('warning', "Could not remove the empty VD group %s: %s", $group_id, $@) if $@;
+    }
 
     eval { run_command(['multipath', '-f', $mp_wwid], outfunc => sub {}, errfunc => sub {}); }
         if defined($mp_wwid);
@@ -998,11 +1272,23 @@ sub ssy_delete_scsi_paths {
 sub ssy_request {
     my ($request, $scfg, $storeid, $method, $endpoint, $body) = @_;
 
-    if ( ($request ne "GET HOSTs") && ($request ne "GET VD Templates")  && ($request ne "GET PORTS") ) {
-        print "Calling the SANsymphony REST API: $request\n";
+    # Chatty GETs stay off the journal: pvestatd calls status() every few
+    # seconds and each of those fans out to host/template/port lookups, so
+    # logging them would bury every real operation. The snapshot / rollback
+    # group lists are read on every free_image. They are still traced under
+    # `debug`.
+    my $chatty = ($request eq "GET HOSTs" || $request eq "GET VD Templates"
+                  || $request eq "GET PORTS"
+                  || $request =~ /^GET (?:snapshot|rollback)groups$/);
+    if ($chatty) {
+        ssy_log('debug', "REST %s %s (%s)", $method, $endpoint, $request)
+            if $DEBUG;
+    } else {
+        ssy_log('info', "REST %s %s (%s)", $method, $endpoint, $request);
     }
 
     my @ssy_portals = split(/\s*,\s*/, $scfg->{SSYipAddress});
+    my @unreachable;
 
     foreach my $portal (@ssy_portals) {
         my $url = "https://$portal/RestService/rest.svc/$endpoint";
@@ -1020,27 +1306,55 @@ sub ssy_request {
 
         my $encoded_pass = ssy_get_pass($storeid);
         my $password = decode_password($encoded_pass);
+        # NEVER log $req itself, or $req->as_string: this line puts the SAN
+        # password into it as an Authorization: Basic header.
         $req->authorization_basic( $scfg->{SSYusername}, $password);
 
         if ($body) {
             $req->content(encode_json($body));
         }
 
-        next if (!PVE::Network::tcp_ping($portal, 443, 2));
+        # A skipped portal used to be invisible, which is exactly the evidence
+        # needed to tell "the SAN refused us" from "we never reached the SAN".
+        if (!PVE::Network::tcp_ping($portal, 443, 2)) {
+            push @unreachable, $portal;
+            ssy_log('warning', "REST portal %s unreachable (tcp_ping :443 "
+                             . "timed out after 2s), trying the next portal",
+                    $portal);
+            next;
+        }
 
+        my $t0 = [gettimeofday];
         my $res = $ua->request($req);
+        my $ms = int(tv_interval($t0) * 1000);
+
         if ($res->is_success) {
+            ssy_log($chatty ? 'debug' : 'info',
+                    "REST %s %s -> %s in %dms via %s (%s)",
+                    $method, $endpoint, $res->code, $ms, $portal, $request)
+                if !$chatty || $DEBUG;
+
             if (eval { decode_json($res->decoded_content); 1 }){
                 return decode_json($res->decoded_content);
             } else {
                 return $res;
             }
         } else {
-            die "SANsymphony API request $request failed with HTTP Error: " . $res->status_line ." \nHTTP Response: " . $res->decoded_content;
+            # Note: this dies on the FIRST portal that answers with an HTTP
+            # error rather than trying the next one, so portal failover only
+            # covers TCP unreachability. Deliberately left as-is; the log line
+            # names the portal so the behaviour is at least visible.
+            # info, not err: the die below already puts the failure in the task log
+            ssy_log('info', "REST %s %s -> %s in %dms via %s (%s) FAILED",
+                    $method, $endpoint, $res->status_line, $ms, $portal,
+                    $request);
+            die "$LOG_PREFIX: SANsymphony API request $request failed with HTTP Error: " . $res->status_line ." \nHTTP Response: " . $res->decoded_content;
         }
     }
 
-    die "The REST server is not reachable on @ssy_portals \n";
+    ssy_log('err', "REST %s %s (%s) failed: no portal reachable of %s",
+            $method, $endpoint, $request, join(', ', @ssy_portals));
+    die "$LOG_PREFIX: The REST server is not reachable on @ssy_portals \n";
 }
 
 sub ssy_get_vds {
@@ -1060,7 +1374,7 @@ sub ssy_get_vdt_info {
             return ($vdt->{Id}, $vdt->{VirtualDiskAlias}, $vdt->{NVMeEnabled});
         }
     }
-    die "Did not find the appropriate VD Template details";
+    die "$LOG_PREFIX: Did not find the appropriate VD Template details";
 }
 
 sub ssy_get_vd_id_from_wwid {
@@ -1105,11 +1419,18 @@ sub ssy_register_host {
 
     if ($scfg->{protocol} && $scfg->{protocol} eq 'nvme-tcp')
     {
-        run_command(['grep', '-oP', 'nqn\..*', '/etc/nvme/hostnqn'],
+        # nvme-cli resolves the NQN exactly as 'nvme connect' will present it
+        my $nqn;
+        run_command([$NVME_CLI, 'show-hostnqn'],
         errmsg => 'Getting the nvme initiator name',
         outfunc => sub {
-            $initiatorname = shift;
+            $nqn //= shift;
         });
+        $initiatorname = $nqn;
+        $initiatorname =~ s/^\s+|\s+$//g if defined $initiatorname;
+        die "$LOG_PREFIX: Invalid NVMe host NQN '" . ($initiatorname // '') . "' from 'nvme show-hostnqn'; "
+            . "/etc/nvme/hostnqn must contain a single line starting with 'nqn.' (no comments)\n"
+            if !defined($initiatorname) || $initiatorname !~ /^nqn\./;
     }
     else
     {
@@ -1122,26 +1443,159 @@ sub ssy_register_host {
 
     print "Debug :: Initiator Name: $initiatorname\n" if $DEBUG;
 
-    my $ssy_hosts = ssy_get_hosts($scfg, $storeid);
-    foreach my $host (@$ssy_hosts) {
-        if ($host->{Caption} eq $host_name) {
-            my $assign_status = ssy_check_port_assigned_to_host($scfg, $storeid, $initiatorname, $host->{Id});
-            print "Initiator: $initiatorname, Host: $host_name, STATE: $assign_status\n" if $DEBUG;
-            if ($assign_status eq 0)
-            {
-                ssy_assign_port_to_host($scfg, $storeid, $initiatorname, $host->{Id});
-                return;
-            }
-            else
-            {
-                return;
+    # The initiator (port) identifies this node's DataCore host; the caption is only
+    # the name given to a host we create, so a host pre-registered under any name is reused.
+    my $initiator_file = ssy_initiator_file(PVE::INotify::nodename(), $scfg);
+    my $ports = ssy_get_ports($scfg, $storeid);
+    my $host_id = ssy_find_host_id_by_port($scfg, $storeid, $initiatorname, $ports);
+
+    if (!defined $host_id) {
+        # Initiator changed (e.g. /etc/nvme/hostnqn): the host owning the previously
+        # published one is still this node's host, move the new port onto it.
+        # The node's other initiators (iSCSI + NVMe on one node): published by an earlier
+        # activation, or still only present locally (registered by an older plugin version).
+        my @known;
+        foreach my $proto ('iscsi', 'nvme-tcp') {
+            push @known, ssy_read_initiator(ssy_initiator_file(PVE::INotify::nodename(), { %$scfg, protocol => $proto }));
+        }
+        push @known, ssy_local_initiators($scfg);
+        foreach my $known (grep { defined $_ && lc($_) ne lc($initiatorname) } @known) {
+            $host_id = ssy_find_host_id_by_port($scfg, $storeid, $known, $ports);
+            last if defined $host_id;
+        }
+        ssy_assert_host_not_of_other_node($scfg, $storeid, $host_id, $ports) if defined $host_id;
+
+        # A host pre-created under this node's name with no ports yet is reused too, DataCore
+        # rejects a second host with the same name. One that already has ports belongs to
+        # another node (e.g. same name in another cluster) and is never given this port.
+        if (!defined $host_id) {
+            my $hosts = ssy_get_hosts($scfg, $storeid);
+            my ($same_name) = grep { ($_->{Caption} // '') eq $host_name } @$hosts;
+            if ($same_name) {
+                my @owned = grep { lc($_->{HostId} // '') eq lc $same_name->{Id} } @$ports;
+                die "$LOG_PREFIX: DataCore host '$host_name' already exists and has other ports assigned "
+                    . "(" . join(', ', map { $_->{PortName} } @owned) . "); assign port '$initiatorname' "
+                    . "to the right host in DataCore, then activate the storage again\n" if @owned;
+                $host_id = $same_name->{Id};
             }
         }
+
+        if (!defined $host_id) {
+            $host_id = eval { ssy_add_host($scfg, $storeid, $host_name) };
+            die "$LOG_PREFIX: Could not add host '$host_name' to DataCore: $@"
+                . "If a host for this node already exists, assign port '$initiatorname' to it in DataCore\n"
+                if $@;
+        }
+        ssy_assign_port_to_host($scfg, $storeid, $initiatorname, $host_id);
+    } else {
+        # found through this node's own initiator: a cloned image shares it with another node
+        ssy_assert_host_not_of_other_node($scfg, $storeid, $host_id, $ports);
     }
 
-    my $host_id = ssy_add_host($scfg, $storeid, $host_name);
+    # Published last, so other nodes only ever see an initiator that is registered
+    (my $node_dir = $initiator_file) =~ s{/[^/]+$}{};
+    die "$LOG_PREFIX: Cannot publish initiator, $node_dir does not exist (is this node's name '"
+        . PVE::INotify::nodename() . "' a member of the cluster?)\n" if !-d $node_dir;
+    my $published = ssy_read_initiator($initiator_file);
+    return if defined $published && $published eq $initiatorname;    # avoid a pmxcfs write per activation
+    eval {
+        open(my $fh, '>', $initiator_file) or die "$!\n";
+        print $fh "$initiatorname\n";
+        close($fh) or die "$!\n";
+    };
+    die "$LOG_PREFIX: Cannot publish initiator to $initiator_file, check cluster quorum: $@" if $@;
+}
 
-    ssy_assign_port_to_host($scfg, $storeid, $initiatorname, $host_id);
+# Cluster-visible (pmxcfs) file holding a node's initiator name for the storage protocol
+sub ssy_initiator_file {
+    my ($node, $scfg) = @_;
+    return "/etc/pve/nodes/$node/ssy-initiator-" . ($scfg->{protocol} || 'iscsi');
+}
+
+sub ssy_read_initiator {
+    my ($file) = @_;
+    open(my $fh, '<', $file) or return undef;
+    my $line = <$fh>;
+    close($fh);
+    return undef if !defined $line;
+    $line =~ s/^\s+|\s+$//g;
+    return $line eq '' ? undef : $line;
+}
+
+# A host found through this node's other initiator must not already be another node's host
+# (two nodes cloned from one image share an initiator name).
+sub ssy_assert_host_not_of_other_node {
+    my ($scfg, $storeid, $host_id, $ports) = @_;
+    my $me = PVE::INotify::nodename();
+    # advisory check: an unreadable members list must not stop this node activating
+    my @others = eval { grep { $_ ne $me } ssy_cluster_nodes() };
+    if ($@) {
+        ssy_log('warning', "clone check skipped: $@");
+        return;
+    }
+    foreach my $node (@others) {
+        foreach my $proto ('iscsi', 'nvme-tcp') {
+            my $ini = ssy_read_initiator(ssy_initiator_file($node, { %$scfg, protocol => $proto }));
+            my $owner = eval { ssy_find_host_id_by_port($scfg, $storeid, $ini, $ports) };
+            if ($@) {    # that node's own problem, not a reason to stop this node
+                ssy_log('warning', "clone check skipped for node '$node': $@");
+                next;
+            }
+            die "$LOG_PREFIX: DataCore host $host_id already belongs to node '$node' (initiator '$ini'), "
+                . "so this node's initiator names are duplicates of that node's (cloned image?); "
+                . "give each node its own /etc/nvme/hostnqn and /etc/iscsi/initiatorname.iscsi\n"
+                if defined $owner && lc($owner) eq lc($host_id);
+        }
+    }
+}
+
+our $NVME_HOSTNQN_FILE = '/etc/nvme/hostnqn';    # overridable for tests
+our $ISCSI_INITIATORNAME_FILE = '/etc/iscsi/initiatorname.iscsi';
+
+# Initiators of the protocol this storage does NOT use, as configured on this node
+sub ssy_local_initiators {
+    my ($scfg) = @_;
+    my @found;
+    if (($scfg->{protocol} // '') eq 'nvme-tcp') {
+        if (open(my $fh, '<', $ISCSI_INITIATORNAME_FILE)) {
+            while (my $l = <$fh>) { push @found, $1 if $l =~ /^InitiatorName=\s*(iqn\.\S+)/; }
+            close($fh);
+        }
+    } else {
+        # the stored hostnqn only: 'nvme show-hostnqn' may print a value generated on the fly
+        if (open(my $fh, '<', $NVME_HOSTNQN_FILE)) {
+            while (my $l = <$fh>) { push @found, $1 if $l =~ /^\s*(nqn\.\S+)\s*$/; }
+            close($fh);
+        }
+    }
+    return @found;
+}
+
+sub ssy_get_ports {
+    my ($scfg, $storeid) = @_;
+    my $ports = ssy_request('GET PORTS', $scfg, $storeid, 'GET', "1.0/ports?supportsNVMeTcpPorts=true");
+    die "$LOG_PREFIX: Unexpected response listing DataCore ports\n" if ref($ports) ne 'ARRAY';
+    return $ports;
+}
+
+# DataCore host Id that owns the given initiator port, undef if none. $ports may be
+# passed to avoid refetching.
+sub ssy_find_host_id_by_port {
+    my ($scfg, $storeid, $initiator, $ports) = @_;
+    return undef if !defined $initiator || $initiator eq '';
+
+    $ports //= ssy_get_ports($scfg, $storeid);
+
+    my %owners;
+    foreach my $port (@$ports) {
+        next if !defined($port->{PortName}) || !defined($port->{HostId}) || $port->{HostId} eq '';
+        $owners{lc $port->{HostId}} = $port->{HostId} if lc($port->{PortName}) eq lc($initiator);
+    }
+
+    my @ids = values %owners;
+    die "$LOG_PREFIX: Initiator '$initiator' is assigned to several DataCore hosts (" . join(', ', sort @ids)
+        . "); keep it on one host\n" if @ids > 1;
+    return $ids[0];
 }
 
 sub ssy_add_host {
@@ -1168,30 +1622,6 @@ sub ssy_assign_port_to_host {
     });
 }
 
-sub ssy_check_port_assigned_to_host {
-    my ($scfg, $storeid, $portname, $host_id) = @_;
-    
-    print "ssy_check_port_assigned_to_host() -> Portname: $portname, Hostid: $host_id\n" if $DEBUG;
-    
-    my $supportsNVMeTcpPorts = "true";
-    my $ports = ssy_request('GET PORTS', $scfg, $storeid, 'GET', "1.0/ports?supportsNVMeTcpPorts=$supportsNVMeTcpPorts" );
-
-    my $assigned = 0;
-    foreach my $port (@$ports)
-    {
-        #Print all the ports
-        print "Port: $port->{PortName}, Hostid: $port->{HostId}\n" if $DEBUG;
-        if ( (defined($host_id) && defined($portname)) && ($host_id ne '' && $portname ne '') &&
-            (defined($port->{HostId}) && defined($port->{PortName})) && ($port->{HostId} ne '' && $port->{PortName} ne '') &&
-            (lc($port->{HostId}) eq lc($host_id)) && (lc($port->{PortName}) eq lc($portname)) )
-        {
-            $assigned = 1;
-        }
-    }
-
-    return $assigned;
-}
-
 sub ssy_get_hosts {
     my ($scfg, $storeid) = @_;
 
@@ -1200,34 +1630,55 @@ sub ssy_get_hosts {
     return $ssy_hosts;
 }
 
+# Current cluster members. /etc/pve/nodes also keeps the directory of a node removed with
+# 'pvecm delnode', which has no initiator file and would block every create/delete.
+our $MEMBERS_FILE = '/etc/pve/.members';
+
+sub ssy_cluster_nodes {
+    my $file = $MEMBERS_FILE;
+    # Without the members list a clustered node would silently shrink to itself, leaving the other
+    # nodes' mappings in place on delete: fail instead (pmxcfs not mounted / quorum lost).
+    die "$LOG_PREFIX: Cannot list the cluster nodes, $file is missing (is /etc/pve mounted?)\n" if !-e $file;
+    my $members = eval { decode_json(PVE::Tools::file_get_contents($file)) };
+    die "$LOG_PREFIX: Cannot read the cluster members from $file: " . ($@ || "unexpected content\n")
+        if ref($members) ne 'HASH';
+    my $list = $members->{nodelist};
+    return (PVE::INotify::nodename()) if !defined $list;    # standalone node: no nodelist
+    die "$LOG_PREFIX: Unexpected nodelist in $file\n" if ref($list) ne 'HASH';
+    my @nodes = sort keys %$list;
+    return @nodes if @nodes;
+    return (PVE::INotify::nodename());
+}
+
 sub ssy_get_host_ids {
     my ($scfg, $storeid) = @_;
     my @pve_hosts;
-    my @hosts = ();
-    my $ssy_hosts = ssy_get_hosts($scfg, $storeid);
-
+    my @hosts;
+    my %node_of;
 
     if ($scfg->{nodes}){
 	    my $nodes = PVE::Storage::Plugin->encode_value($scfg->{type}, 'nodes', $scfg->{nodes});
         @pve_hosts = split(/\s*,\s*/, $nodes);
     } else {
-        @pve_hosts = `ls /etc/pve/nodes`;
-        chomp @pve_hosts;
+        @pve_hosts = ssy_cluster_nodes();
     }
 
-    foreach my $host (@$ssy_hosts) {
-        foreach my $pve (@pve_hosts) {
-            if ($host->{Caption} eq $pve) {
-                push @hosts, $host->{Id};
-            }
-        }
+    my $ports = ssy_get_ports($scfg, $storeid);
+
+    foreach my $pve (@pve_hosts) {
+        my $initiator = ssy_read_initiator(ssy_initiator_file($pve, $scfg));
+        my $host_id = ssy_find_host_id_by_port($scfg, $storeid, $initiator, $ports);
+        die "$LOG_PREFIX: No registered DataCore host found for node '$pve'; activate the storage on that node\n"
+            if !defined $host_id;
+
+        ssy_log('warning', "nodes '$node_of{lc $host_id}' and '$pve' resolve to the same DataCore host $host_id")
+            if $node_of{lc $host_id};
+        next if $node_of{lc $host_id};
+        $node_of{lc $host_id} = $pve;
+        push @hosts, $host_id;
     }
 
-    if (@hosts){
-        return @hosts;
-    } else {
-        die "Did not find the appropriate Host details";
-    }
+    return @hosts;
 }
 
 sub ssy_get_vmid {
@@ -1236,14 +1687,14 @@ sub ssy_get_vmid {
     # Directory containing VM .conf files
     my $dir = '/etc/pve/qemu-server/';
 
-    opendir(my $dh, $dir) or die "Cannot open directory $dir: $!";
+    opendir(my $dh, $dir) or die "$LOG_PREFIX: Cannot open directory $dir: $!\n";
     my @files = grep { /\.conf$/ && -f "$dir/$_" } readdir($dh);
     closedir($dh);
 
     foreach my $file (@files) {
         my $config_file = "$dir$file";
         
-        open(my $fh, '<', $config_file) or die "Could not open file '$config_file' $!";
+        open(my $fh, '<', $config_file) or die "$LOG_PREFIX: Could not open file '$config_file': $!\n";
 
         while (my $line = <$fh>) {
             chomp $line;
@@ -1280,6 +1731,7 @@ sub ssy_vd_from_vdt {
     my $vd = ssy_request('CREATE VD from VD Template', $scfg, $storeid, 'POST', '1.0/virtualdisks', {
         VirtualDiskTemplate => $vdt_id,
         Name => $vd_name,
+        Description => ssy_vm_tag($vmid),
         Size => "$size_GiB GB",
         Count => 1,
     });
@@ -1297,7 +1749,7 @@ sub ssy_vd_from_vdt {
             my ($vd) = grep { lc($_->{Id}) eq lc($vd_id) } @$vds;
             if (!$vd)
             {
-                die "VD '$vd_name' not found in virtual disk list after creation\n";
+                die "$LOG_PREFIX: VD '$vd_name' not found in virtual disk list after creation\n";
             }
 
             my $health = $vd->{DiskStatus} // '';
@@ -1306,7 +1758,7 @@ sub ssy_vd_from_vdt {
 
             if ($waited >= $max_wait)
             {
-                die "VD '$vd_name' did not become healthy within ${max_wait}s (DiskStatus=$health)\n";
+                die "$LOG_PREFIX: VD '$vd_name' did not become healthy within ${max_wait}s (DiskStatus=$health)\n";
             }
 
             sleep(1);
@@ -1314,12 +1766,18 @@ sub ssy_vd_from_vdt {
         }
 
         print "VD '$vd_name' is healthy after ${waited}s\n" if $DEBUG;
+        # This line used to sit after the if/else below, i.e. after a return in
+        # one branch and a die in the other -- it was never reached, so a
+        # successful create announced itself nowhere. Moved to where it fires.
+        print "$LOG_PREFIX: SANsymphony VD got created successfully with Virtual Disk ID = $vd_id\n";
+        ssy_log('info', "created vDisk %s ('%s', ScsiDeviceIdString %s) healthy after %ds",
+                $vd_id, $vd_name, $ScsiDeviceIdString // '-', $waited);
         return ($vd_id, $vd_name, $ScsiDeviceIdString);
     } else {
-        die "Unexpected response format from SANsymphony API";
+        ssy_log('err', "create vDisk: unexpected response format from the "
+                     . "SANsymphony API");
+        die "$LOG_PREFIX: Unexpected response format from SANsymphony API\n";
     }
-
-    print "SANsymphony VD got created successfully with Virtual Disk ID = $vd_id \n";
 }
 
 sub ssy_serve_vd {
@@ -1331,7 +1789,8 @@ sub ssy_serve_vd {
         Redundancy => 'true',
         StartingLUN => $lun
     });
-    print "SANsymphony VD {$vd_id} got served to host {$host_id} successfully \n";
+    print "$LOG_PREFIX: SANsymphony VD {$vd_id} got served to host {$host_id} successfully\n";
+    ssy_log('info', "served vDisk %s to host %s at LUN %s", $vd_id, $host_id, $lun);
 
 }
 
@@ -1359,7 +1818,7 @@ sub ssy_get_lun {
         # Deleting the VD as there are no free LUNs available
         $data = ssy_request('DELETE VD', $scfg, $storeid, 'DELETE', "1.0/virtualdisks/$vd_id");
 
-        die "No free LUNs available for serving the new VD";
+        die "$LOG_PREFIX: No free LUNs available for serving the new VD";
     }
 
     return $lun;
@@ -1367,16 +1826,85 @@ sub ssy_get_lun {
 
 sub ssy_unserve_delete_vd {
     my ($vd_id, $scfg, $storeid, @host_ids) = @_;
-    
+
     my $data;
     foreach my $host_id (@host_ids){
+        ssy_log('info', "unserving vDisk %s from host %s", $vd_id, $host_id);
         $data = ssy_request('UNSERVE VD', $scfg, $storeid, 'POST', "1.0/virtualdisks/$vd_id", {
             Operation => 'Unserve',
             Host => $host_id,
         });
     }
 
+    ssy_log('info', "deleting vDisk %s on '%s'", $vd_id, $storeid);
     $data = ssy_request('DELETE VD', $scfg, $storeid, 'DELETE', "1.0/virtualdisks/$vd_id");
+}
+
+sub ssy_vm_tag { return sprintf("[Proxmox VM %s]", $_[0]); }
+
+# Keep all VDs of a VM (2+) in one VD group named after the VM id.
+# VDs are matched by SCSI id, groups by VirtualDiskGroupId - never by caption.
+sub ssy_ensure_vd_group {
+    my ($class, $scfg, $storeid, $vmid, $new_vd_id) = @_;
+
+    # VDs are tagged with their owner at creation (ssy_vd_from_vdt): during a multi-disk
+    # create PVE allocates every disk before it writes the VM config, so list_images
+    # cannot see the earlier disks yet.
+    my $owner_tag = ssy_vm_tag($vmid);
+
+    my $vds = ssy_get_vds($scfg, $storeid);
+
+    my %ids;    # lc(wwid or nvme-uuid) of the VM's existing disks
+    foreach my $img (@{ $class->list_images($storeid, $scfg, $vmid) }) {
+        $ids{lc($1)} = 1 if $img->{volid} =~ /\d+\.\d+\.\d+\.scsi-3(\w+):\d+$/
+                         || $img->{volid} =~ /\d+\.\d+\.\d+\.(nvme-uuid\.[^:]+):\d+$/;
+    }
+
+    my @vm_vds = grep {
+        lc($_->{Id}) ne lc($new_vd_id)
+        && (index($_->{Description} // '', $owner_tag) >= 0
+            || $ids{lc($_->{ScsiDeviceIdString} // '')} || $ids{lc(eval { wwn_to_nvme_uuid($_->{ScsiDeviceIdString}) } // '')})
+    } @$vds;
+    return if !@vm_vds;    # single VD: no group
+
+    my @disks = ((map { $_->{Id} } @vm_vds), $new_vd_id);
+    my %want = map { lc($_) => 1 } @disks;
+
+    my ($gid) = grep { defined && length } map { $_->{VirtualDiskGroupId} } @vm_vds;
+    if ($gid) {
+        # never extend a group that holds VDs of other VMs
+        if (grep { lc($_->{VirtualDiskGroupId} // '') eq lc($gid) && !$want{lc($_->{Id})} } @$vds) {
+            ssy_log('warning', "VD group %s holds VDs of other VMs, leaving it alone", $gid);
+            return;
+        }
+        my @missing = grep { my $id = $_; !grep { lc($_->{Id}) eq lc($id) && lc($_->{VirtualDiskGroupId} // '') eq lc($gid) } @$vds } @disks;
+        ssy_request('ADD VDs to VD Group', $scfg, $storeid, 'POST', "1.0/virtualdiskgroups/$gid/virtualdisks",
+            { VirtualDisks => \@missing }) if @missing;
+        return;
+    }
+
+    # groups already named like this VM, so cleanup below never touches one that predates the create
+    my $before = eval { ssy_request('GET VD Groups', $scfg, $storeid, 'GET', '1.0/virtualdiskgroups') } // [];
+    my %preexisting = map { lc($_->{Id} // '') => 1 } @$before;
+    eval {
+        ssy_request('CREATE VD Group', $scfg, $storeid, 'POST', '1.0/virtualdiskgroups', {
+            Name => "$vmid",
+            Description => "VDs of Proxmox VM $vmid, managed by the proxmox storage plugin",
+            Disks => \@disks,
+        });
+    };
+    if (my $err = $@) {
+        # a failed create can leave an empty group behind
+        eval {
+            my $now = ssy_get_vds($scfg, $storeid);
+            my $groups = ssy_request('GET VD Groups', $scfg, $storeid, 'GET', '1.0/virtualdiskgroups');
+            foreach my $g (grep { ($_->{Caption} // '') eq "$vmid" && !$preexisting{lc($_->{Id} // '')} } @$groups) {
+                next if grep { lc($_->{VirtualDiskGroupId} // '') eq lc($g->{Id}) } @$now;
+                ssy_request('DELETE VD Group', $scfg, $storeid, 'DELETE', "1.0/virtualdiskgroups/$g->{Id}");
+            }
+        };
+        die $err;
+    }
 }
 
 sub load_stable_scsi_paths {
@@ -1494,7 +2022,7 @@ sub load_stable_nvme_paths {
         $dh->close;
     }
 
-    print "load_stable_nvme_paths:\n" . Dumper($stable_paths) . "\n" if $DEBUG;
+    print "load_stable_nvme_paths:\n" . ssy_redact(Dumper($stable_paths)) . "\n" if $DEBUG;
     return $stable_paths;
 }
 
@@ -1614,13 +2142,13 @@ sub parse_volname {
         return ('images', $1, $2, undef, undef, undef, 'raw');
     }
 
-    die "unable to parse volume name '$volname'\n";
+    die "$LOG_PREFIX: unable to parse volume name '$volname'\n";
 }
 
 sub filesystem_path {
     my ($class, $scfg, $volname, $snapname) = @_;
 
-    die "snapshot is not possible on iscsi storage\n" if defined($snapname);
+    die "$LOG_PREFIX: snapshot is not possible on iscsi storage\n" if defined($snapname);
 
     my ($vtype, $name, $vmid) = $class->parse_volname($volname);
 
@@ -1631,6 +2159,7 @@ sub filesystem_path {
 
 sub list_volumes {
     my ($class, $storeid, $scfg, $vmid, $content_types) = @_;
+    $DEBUG = ssy_debug_enabled($scfg);
 
     print "Debug :: PVE::Storage::Custom::SANsymphonyPlugin::sub::list_volumes\n" if $DEBUG;
 
@@ -1645,6 +2174,7 @@ sub list_volumes {
 
 sub list_images {
     my ($class, $storeid, $scfg, $vmid, $vollist, $cache) = @_;
+    $DEBUG = ssy_debug_enabled($scfg);
 
     print "Debug :: PVE::Storage::Custom::SANsymphonyPlugin::sub::list_images\n" if $DEBUG;
 
@@ -1702,6 +2232,7 @@ sub list_images {
 
 sub check_connection {
     my ($class, $storeid, $scfg) = @_;
+    $DEBUG = ssy_debug_enabled($scfg);
 
     print "Debug :: PVE::Storage::Custom::SANsymphonyPlugin::sub::check_connection\n" if $DEBUG;
     my $cache = {};
@@ -1739,19 +2270,28 @@ sub check_connection {
 sub create_base {
     my ($class, $storeid, $scfg, $volname) = @_;
 
-    die "can't create base images in iscsi storage\n";
+    die "$LOG_PREFIX: can't create base images in iscsi storage\n";
 }
 
 sub clone_image {
     my ($class, $scfg, $storeid, $volname, $vmid, $snap) = @_;
 
-    die "can't clone images in iscsi storage\n";
+    die "$LOG_PREFIX: can't clone images in iscsi storage\n";
 }
 
 sub volume_resize {
     my ($class, $scfg, $storeid, $volname, $size, $running) = @_;
+    $DEBUG = ssy_debug_enabled($scfg);
 
     my $size_GiB = $size / (1024*1024*1024);
+
+    # A LOCAL $vd_id, deliberately shadowing the file-scoped one declared at the
+    # top of this module. Without it an unparsable $volname left the package
+    # variable holding whatever the last alloc_image in this same worker process
+    # had put there -- and the PUT below then resized THAT vDisk instead, with
+    # no warning. pvedaemon reuses workers, so the two calls really can share a
+    # process.
+    my $vd_id;
 
     if ($volname =~ /\d+\.\d+\.\d+\.scsi-3(\w+):\d+$/) {
         my $wwid = $1;
@@ -1762,13 +2302,27 @@ sub volume_resize {
         my $nvmeuuid = $1;
         $vd_id = ssy_get_vd_id_from_nvmeuuid($scfg, $nvmeuuid, $storeid);
     }
+    else {
+        ssy_log('err', "resize of '%s' on '%s': volume name matches neither "
+                     . "the SCSI nor the NVMe form", $volname, $storeid);
+        die "$LOG_PREFIX: cannot resize '$volname': unrecognised volume name\n";
+    }
+
+    if (!$vd_id) {
+        ssy_log('err', "resize of '%s' on '%s': no SANsymphony vDisk found for "
+                     . "that volume", $volname, $storeid);
+        die "$LOG_PREFIX: cannot resize '$volname': no matching SANsymphony vDisk\n";
+    }
 
     print "volume_resize() -> Volname: $volname, VD id: $vd_id, Size: $size_GiB GB\n" if $DEBUG;
+    ssy_log('info', "resize vDisk %s ('%s' on '%s') to %s GB",
+            $vd_id, $volname, $storeid, $size_GiB);
 
     ssy_request('Set Virtual Disk Properties', $scfg, $storeid, 'PUT', "/1.0/virtualdisks/$vd_id", {
         Size => "$size_GiB GB"
     });
 
+    ssy_log('info', "resize vDisk %s to %s GB completed", $vd_id, $size_GiB);
 }
 
 sub volume_has_feature {

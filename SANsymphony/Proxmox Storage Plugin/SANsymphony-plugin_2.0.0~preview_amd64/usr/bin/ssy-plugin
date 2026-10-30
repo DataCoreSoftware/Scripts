@@ -1,0 +1,48 @@
+#!/usr/bin/python3
+"""ssy-plugin launcher — opens the ssy-plugin terminal UI (packaged variant).
+
+Installed to /usr/bin/ssy-plugin by the ssy-plugin .deb.
+
+`ssy-plugin` used to be the old interactive prompt-and-answer wizard. That
+is still shipped, as **ssy-plugin-old** — the swap is the whole point of
+this file existing under this name.
+
+Neither the ssy_plugin package nor its third-party dependencies sit on the
+default sys.path, so put both on it before importing:
+
+    <SSY_PLUGIN_HOME>/           the ssy_plugin package itself
+    <SSY_PLUGIN_HOME>/vendor/    textual + rich & co, vendored into the package
+
+textual is bundled rather than taken from `python3-textual`, so the plugin
+installs and runs on an air-gapped node with no extra packages. vendor/ goes on
+the path first so the tested, pinned copy wins over any system-wide textual.
+"""
+
+import os
+import sys
+
+HOME = (os.environ.get("SSY_PLUGIN_HOME")
+        or os.environ.get("SSY_TUI_HOME", "/usr/lib/ssy-plugin"))
+sys.path.insert(0, os.path.join(HOME, "vendor"))
+sys.path.insert(0, HOME)
+
+# The UI takes no arguments except -V/--version (answered by main()) —
+# so without this an old scripted call like `ssy-plugin ssy --ssyipaddress …`
+# would quietly open a full-screen UI and hang the script on a terminal
+# nobody is watching. Fail loudly and name the command that still does it.
+_PROG = os.path.basename(sys.argv[0]) or "ssy-plugin"
+if len(sys.argv) > 1 and sys.argv[1] not in ("-V", "--version"):
+    _WANTS_HELP = sys.argv[1] in ("-h", "--help")
+    print(
+        f"{_PROG}: opens the SANsymphony terminal UI and takes no arguments.\n"
+        f"  {_PROG:<18} start the UI\n"
+        f"  {'ssy-plugin-old':<18} the old interactive/CLI wizard "
+        "(ssy | lvm | remove | multipath)\n"
+        f"  {'ssy-plugin-old -h':<18} its own help",
+        file=sys.stderr,
+    )
+    sys.exit(0 if _WANTS_HELP else 2)
+
+from ssy_plugin.app import main  # noqa: E402
+
+main()

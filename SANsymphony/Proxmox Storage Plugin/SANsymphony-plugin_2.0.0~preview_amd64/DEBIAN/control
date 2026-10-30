@@ -1,0 +1,18 @@
+Source: ssy-plugin
+Package: ssy-plugin
+Version: @VERSION@
+Maintainer: Prajwal Shetty <prajwal.shetty@datacore.com>
+Architecture: amd64
+Depends: python3 (>= 3.11), jq, libpve-storage-perl
+Recommends: python3-systemd
+Description: A proxmox storage plugin for DataCore SANsymphony.
+ Ships the SANsymphony PVE storage module and the terminal UI for managing
+ SSY storage: /usr/bin/ssy-plugin opens the UI. The earlier prompt-and-answer
+ wizard is still available as /usr/bin/ssy-plugin-old.
+ .
+ The terminal UI's Python dependencies (textual and friends) are bundled under
+ /usr/lib/ssy-plugin/vendor, so no python3-textual package is required and the
+ plugin installs on an air-gapped node.
+@PREVIEW_NOTICE@
+Section: utils
+Priority: optional

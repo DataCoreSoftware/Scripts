@@ -1,0 +1,30 @@
+[Unit]
+Description=ssy-plugin DataCore performance collector
+Documentation=file:///usr/share/doc/ssy-plugin/README.md
+After=network-online.target pve-cluster.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# The ssy_plugin package and its vendored dependencies are installed under
+# /usr/lib/ssy-plugin, which is not on the system python3's default sys.path, so
+# point PYTHONPATH at both. The collector itself needs only the stdlib + the
+# ssy_plugin package (no textual import); vendor/ is listed so it keeps working if
+# that ever changes.
+Environment=PYTHONPATH=/usr/lib/ssy-plugin:/usr/lib/ssy-plugin/vendor
+ExecStart=/usr/bin/python3 -m ssy_plugin.collector --interval 5
+# Without this, systemd derives the identifier from the binary and every entry
+# is tagged `python3` — useless for `journalctl -t` and invisible to the `ssy*`
+# Identifier glob in the PVE System Log panel, which is how an operator finds
+# both of our processes in one filter.
+SyslogIdentifier=ssy-plugin-collect
+# The collector is the one ssy-plugin process that logs on a fixed cadence. Opt out
+# of journald's burst limiter so a busy cycle cannot silently drop records
+# ("Suppressed N messages") from the audit trail.
+LogRateLimitIntervalSec=0
+Restart=always
+RestartSec=10
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

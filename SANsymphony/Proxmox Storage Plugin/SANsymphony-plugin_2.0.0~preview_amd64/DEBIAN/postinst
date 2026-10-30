@@ -1,0 +1,115 @@
+#!/bin/bash
+
+set -e
+
+case "$1" in
+	configure)
+
+        STORAGE_CFG="/etc/pve/storage.cfg"
+        PRIV_DIR="/etc/pve/priv/storage"
+
+        if [ -f "$STORAGE_CFG" ]; then
+            current_storeid=""
+            found_any_password=0
+
+            while IFS= read -r line; do
+                if [[ "$line" =~ ^[^[:space:]#] ]]; then
+                    current_storeid=""
+                fi
+
+                if [[ "$line" =~ ^ssy:[[:space:]]*([^[:space:]]+) ]]; then
+                    current_storeid="${BASH_REMATCH[1]}"
+                fi
+
+                if [[ -n "$current_storeid" && \
+                      "$line" =~ ^[[:space:]]+SSYpassword[[:space:]]+([^[:space:]]+) ]]; then
+
+                    plaintext="${BASH_REMATCH[1]}"
+                    encoded=$(printf '%s' "$plaintext" | base64 -w 0)
+                    mkdir -p "$PRIV_DIR"
+
+                    pw_file="$PRIV_DIR/${current_storeid}.pw"
+
+                    printf '%s\n' "$encoded" > "$pw_file"
+                    chmod 0600 "$pw_file"
+
+                    echo "Migrated SSYpassword for storage '${current_storeid}' to ${pw_file}."
+                    found_any_password=1
+                fi
+
+            done < "$STORAGE_CFG"
+
+            if [ "$found_any_password" -eq 1 ]; then
+                sed -i '/^[[:space:]]*SSYpassword[[:space:]]/d' "$STORAGE_CFG"
+                echo "Removed all SSYpassword lines from ${STORAGE_CFG}."
+            fi
+        fi
+
+        # Reload udev rules only if the DataCore rule has changed, 
+        # since reloading is slow and unnecessary when the rule is unchanged.
+        UDEV_RULE="/etc/udev/rules.d/99-datacore.rules"
+        UDEV_HASH_FILE="/var/lib/ssy-plugin/99-datacore.rules.sha256"
+
+        if [ -f "$UDEV_RULE" ] && command -v udevadm >/dev/null; then
+            new_hash="$(sha256sum "$UDEV_RULE" | awk '{print $1}')"
+            old_hash=""
+            [ -f "$UDEV_HASH_FILE" ] && old_hash="$(cat "$UDEV_HASH_FILE")"
+
+            if [ "$new_hash" != "$old_hash" ]; then
+                if [ -z "$old_hash" ]; then
+                    echo "Reloading udev rules (DataCore rule added)..."
+                else
+                    echo "Reloading udev rules (DataCore rule changed)..."
+                fi
+                udevadm control --reload-rules
+                udevadm trigger --subsystem-match=block
+
+                mkdir -p "$(dirname "$UDEV_HASH_FILE")"
+                printf '%s\n' "$new_hash" > "$UDEV_HASH_FILE"
+            else
+                echo "DataCore udev rule unchanged; skipping udev reload."
+            fi
+        fi
+
+        # ssy-plugin log directory. 0700 root:root because this release is
+        # root-only: no non-root reader exists, and the log carries vDisk
+        # captions, NAAs, VM ids and node names. Guarded on the binary so the
+        # block is inert in any build that does not ship ssy-plugin.
+        #
+        # Do NOT chmod an existing ssy-plugin.log here: logrotate's
+        # `create 0600 root root` owns the file's mode from then on, and
+        # logsetup creates it 0600 on first run.
+        if [ -x /usr/bin/ssy-plugin ]; then
+            mkdir -p /var/log/ssy-plugin
+            chmod 0700 /var/log/ssy-plugin
+            chown root:root /var/log/ssy-plugin
+        fi
+
+        # Reload multipath maps
+        if command -v multipath >/dev/null; then
+            echo "Reloading the multipath configuration..."
+            multipath -r
+        fi
+
+        # Reload or restart Proxmox services to apply changes, ignoring failures
+        echo "Reloading the necessary Proxmox daemon services…"
+
+        deb-systemd-invoke reload-or-try-restart pvedaemon.service || true
+		deb-systemd-invoke reload-or-try-restart pveproxy.service || true
+		deb-systemd-invoke reload-or-try-restart pvestatd.service || true
+		deb-systemd-invoke reload-or-try-restart pvescheduler.service || true
+		deb-systemd-invoke reload-or-try-restart pve-ha-lrm.service || true
+
+        # Enable and (re)start the ssy-plugin performance collector. It feeds the
+        # perf history at /var/lib/ssy-plugin/perf.db that the TUI's ∿ Perf view
+        # reads; failures here must never break the install.
+        if [ -d /run/systemd/system ]; then
+            systemctl --system daemon-reload >/dev/null 2>&1 || true
+            deb-systemd-helper enable ssy-plugin-collect.service >/dev/null 2>&1 || true
+            deb-systemd-invoke restart ssy-plugin-collect.service || true
+        fi
+		;;
+
+	*)
+		;;
+esac
