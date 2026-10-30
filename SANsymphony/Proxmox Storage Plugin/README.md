@@ -134,14 +134,11 @@ Already know Proxmox and SANsymphony? This is the whole journey for an iSCSI set
 apt install open-iscsi multipath-tools jq
 
 # 2. On EVERY node: download and install the preview package (.deb only)
-wget https://github.com/DataCoreSoftware/Scripts/releases/download/SSY_PVE_Plugin/SANsymphony-plugin_2.0.0~preview_amd64.deb
-dpkg -i SANsymphony-plugin_2.0.0~preview_amd64.deb
+wget https://github.com/DataCoreSoftware/Scripts/releases/download/SSY_PVE_Plugin/SANsymphony-plugin_2.0.0.preview_amd64.deb
+dpkg -i SANsymphony-plugin_2.0.0.preview_amd64.deb
 
 # 3. On ONE node: open the console and choose "Add SSY storage"
 ssy-plugin
-
-# 4. Confirm the storage is active
-pvesm status
 ```
 
 Now create a VM in the Proxmox web UI and pick your SSY storage for its disk. 🎉
